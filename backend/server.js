@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 require('./config/firebase-admin');
 
 const app = express();
+app.set("trust proxy", 1); // Trust Render's proxy for rate limiting
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const isProduction = process.env.NODE_ENV === 'production';
@@ -69,8 +70,8 @@ app.use('/api/promotion', strictLimiter);
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, curl, etc.) in development
-    if (!origin && !isProduction) {
+    // Allow requests with no origin (mobile apps, curl, health checks, etc.)
+    if (!origin) {
       return callback(null, true);
     }
 
@@ -88,10 +89,9 @@ const corsOptions = {
       "http://127.0.0.1:5502",
       "http://127.0.0.1:8001",
       "http://127.0.0.1:8002",
-      // Production domains - UPDATE THESE WITH YOUR ACTUAL DOMAINS
+      "https://dataentrymla.netlify.app",
+      "https://saas-edtech.onrender.com",
       "https://your-production-domain.com",
-      "https://teaching.yourdomain.com",
-      "https://staff.yourdomain.com",
     ];
 
     // Add any custom allowed origins from environment
