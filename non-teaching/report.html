@@ -14,6 +14,7 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL@20..48,100..700,0..1" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <link rel="stylesheet" href="css/profile.css">
   <style>
     :root {
       --bg-root: #0C0C0E;
@@ -1008,6 +1009,9 @@
     </div>
   </div>
 
+  <!-- Profile Handler -->
+  <script src="js/profile-handler.js"></script>
+
   <!-- Firebase Auth -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
@@ -1032,10 +1036,17 @@
       return name.split(" ").map(n => n[0]).join("").substring(0, 2).toUpperCase();
     }
 
-    function updateUserInfo(displayName, email) {
+    function updateUserInfo(displayName, email, profileImageUrl) {
       document.getElementById('headerUserFullName').textContent = displayName;
       document.getElementById('headerUserEmail').textContent = email;
-      document.getElementById('headerAvatar').textContent = getInitials(displayName);
+      const avatarEl = document.getElementById('headerAvatar');
+      if (avatarEl) {
+        if (profileImageUrl) {
+          avatarEl.innerHTML = `<img src="${profileImageUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+        } else {
+          avatarEl.textContent = getInitials(displayName);
+        }
+      }
     }
 
     document.getElementById("logoutBtn").onclick = () => {
@@ -1044,11 +1055,17 @@
 
     onAuthStateChanged(auth, async (user) => {
       if (user && user.email) {
-        let displayName = user.displayName || user.email.split('@')[0];
+        let displayName = user.displayName || user.email.split('@')[0].replace(/[._]/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
         const profile = await fetchTeacherProfile(user.email);
         if (profile && profile.name) displayName = profile.name;
-        updateUserInfo(displayName, user.email);
-        loadAvailableStreams();
+        updateUserInfo(displayName, user.email, profile?.profileImageUrl);
+
+        // Initialize Profile Image Upload Logic
+        if (typeof initProfileUpload === 'function') {
+          initProfileUpload(user.email);
+        }
+
+        if (typeof initReport === 'function') initReport();
       } else { window.location.href = 'login.html'; }
     });
   </script>

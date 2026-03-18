@@ -14,6 +14,7 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL@20..48,100..700,0..1" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="css/profile.css">
   <style>
     :root {
       --bg-root: #0C0C0E;
@@ -306,7 +307,41 @@
     }
 
     .avatar-pill:hover {
+      background: var(--bg-card-hover);
       border-color: var(--border-hover);
+      transform: translateY(-1px);
+    }
+
+    .avatar-pill:active {
+      transform: translateY(0);
+    }
+
+    .avatar-pill::after {
+      content: 'Update Photo';
+      position: absolute;
+      top: 100%;
+      right: 12px;
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 600;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      white-space: nowrap;
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      z-index: 100;
+      pointer-events: none;
+    }
+
+    .avatar-pill:hover::after {
+      opacity: 1;
+      visibility: visible;
+      margin-top: 6px;
     }
 
     .avatar-dot {
@@ -1293,6 +1328,9 @@
     </div><!-- /scroll -->
   </div><!-- /main -->
 
+  <!-- ══════════ PROFILE HANDLER ══════════ -->
+  <script src="js/profile-handler.js"></script>
+
   <!-- ══════════ FIREBASE ══════════ -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
@@ -1326,11 +1364,17 @@
       return name.trim().split(" ").filter(Boolean).map(n => n[0]).join("").substring(0, 2).toUpperCase();
     }
 
-    function updateUserInfo(name, email) {
+    function updateUserInfo(name, email, profileImageUrl) {
       const el = (id) => document.getElementById(id);
       if (el('headerUserFullName')) el('headerUserFullName').textContent = name;
       if (el('headerUserEmail')) el('headerUserEmail').textContent = email;
-      if (el('headerAvatar')) el('headerAvatar').textContent = getInitials(name);
+      if (el('headerAvatar')) {
+        if (profileImageUrl) {
+          el('headerAvatar').innerHTML = `<img src="${profileImageUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+        } else {
+          el('headerAvatar').textContent = getInitials(name);
+        }
+      }
       if (el('welcomeText')) el('welcomeText').textContent = `Welcome, ${name.split(' ')[0]}`;
     }
 
@@ -1346,7 +1390,13 @@
           .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
         const profile = await fetchTeacherProfile(user.email);
         if (profile?.name) displayName = profile.name;
-        updateUserInfo(displayName, user.email);
+        updateUserInfo(displayName, user.email, profile?.profileImageUrl);
+
+        // Initialize Profile Image Upload Logic
+        if (typeof initProfileUpload === 'function') {
+          initProfileUpload(user.email);
+        }
+
         if (document.readyState === 'complete') {
           if (typeof loadDashboardData === 'function') loadDashboardData();
         } else {

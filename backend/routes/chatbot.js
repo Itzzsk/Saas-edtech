@@ -1,262 +1,55 @@
 // ============================================================================
-// CHATBOT ROUTES - COMPLETE FIXED VERSION WITH ICONS
+// CHATBOT ROUTES - FULL UPDATED VERSION WITH GROQ + INTENT CLASSIFICATION
 // ============================================================================
 
 const express = require('express');
 const router = express.Router();
 const queryGenerator = require('../services/queryGenerator');
-const geminiService = require('../services/geminiService');
-
-
-// ============================================================================
-// ATTENDANCE REPORT FORMATTER
-// ============================================================================
-
-function formatAttendanceReport(data) {
-  if (!data || data.length === 0) {
-    return "No attendance data found for this student.";
-  }
-
-  const student = data[0];
-
-  // Calculate overall stats
-  const totalClasses = data.reduce((sum, s) => sum + (s.totalClasses || 0), 0);
-  const totalAttended = data.reduce((sum, s) => sum + (s.classesAttended || 0), 0);
-  const overallPct = totalClasses > 0 ? ((totalAttended / totalClasses) * 100).toFixed(1) : '0.0';
-  const pct = parseFloat(overallPct);
-  const shortages = data.filter(s => (s.attendancePercentage || 0) < 75);
-
-  // Sort: worst attendance first
-  const sorted = [...data].sort((a, b) => (a.attendancePercentage || 0) - (b.attendancePercentage || 0));
-
-  // Status emoji
-  const statusIcon = pct >= 75 ? '✅' : pct >= 50 ? '⚠️' : '🔴';
-
-  let response = `${statusIcon} **${student.studentName}** — **${overallPct}%** overall attendance\n`;
-  response += `> ${student.stream} Sem ${student.semester} • ${totalAttended}/${totalClasses} classes • ${shortages.length > 0 ? `${shortages.length} subject${shortages.length > 1 ? 's' : ''} below 75%` : 'All subjects above 75%'}\n\n`;
-
-  // Single clean table
-  response += `| Subject | Attended | % | Status |\n`;
-  response += `|---------|:--------:|:---:|:------:|\n`;
-
-  sorted.forEach(subject => {
-    const sPct = (subject.attendancePercentage || 0).toFixed(1);
-    const attended = subject.classesAttended || 0;
-    const total = subject.totalClasses || 0;
-    let status;
-    if (sPct >= 90) status = '🟢 Excellent';
-    else if (sPct >= 75) status = '🟢 Good';
-    else if (sPct >= 50) status = '🟡 Low';
-    else status = '🔴 Critical';
-    response += `| ${subject.subject || 'Unknown'} | ${attended}/${total} | ${sPct}% | ${status} |\n`;
-  });
-
-  // Brief action note only if there are shortages
-  if (shortages.length > 0) {
-    const worst = sorted[0];
-    const needed = Math.max(0, Math.ceil((75 * (worst.totalClasses || 0) - 100 * (worst.classesAttended || 0)) / 25));
-    response += `\n⚠️ **Focus on ${worst.subject}** — needs ${needed} more classes to reach 75%.`;
-  }
-
-  // Add Suggestions
-  const rawName = student.studentName || student.name || '';
-  const stuName = rawName ? rawName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ') : 'this student';
-
-  response += `\n\n**💡 Suggested Follow-ups:**\n- *Who is ${stuName}'s mentor?*\n- *Show ${stuName}'s subjects*\n- *Compare ${stuName} with average*`;
-
-  return response;
-}
-
+const aiService = require('../services/aiService');
 
 // ============================================================================
 // CHAT ENDPOINT
 // ============================================================================
 
 router.post('/chat', async (req, res) => {
-
   try {
-    // Accept both 'message' and 'question', plus conversation history
     const { message, question, history } = req.body;
     const userQuery = message || question;
     const conversationHistory = Array.isArray(history) ? history : [];
 
     if (!userQuery || !userQuery.trim()) {
-      return res.status(400).json({
-        success: false,
-        error: 'Message is required'
-      });
+      return res.status(400).json({ success: false, error: 'Message is required' });
     }
 
-    console.log('User Query:', userQuery);
-    console.log('Conversation History Length:', conversationHistory.length);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`💬 USER: "${userQuery}"`);
+    console.log(`📚 HISTORY: ${conversationHistory.length} messages`);
+    console.log(`${'='.repeat(60)}`);
 
-    // ================================================================
-    // SMART FOLLOW-UP & PRONOUN RESOLUTION
-    // ================================================================
-    let resolvedQuery = userQuery;
     const lowerQuery = userQuery.toLowerCase().trim();
 
-    if (conversationHistory.length > 0) {
-      // STEP A: Extract the last discussed person's name from conversation
-      let lastPersonName = null;
-      let lastPersonType = null; // 'student' or 'teacher'
+    // ================================================================
+    // STATIC QUICK RESPONSES - No API call needed
+    // ================================================================
 
-      // Search through assistant responses for names
-      const assistantMsgs = conversationHistory.filter(m => m.role === 'assistant');
-      if (assistantMsgs.length > 0) {
-        // Try to extract name from AI response patterns (scan backwards through recent bot messages)
-        const namePatterns = [
-          /Name:\s*(?:\*\*)?([a-zA-Z\s]+?)(?:\*\*)?(?:\n|$)/i,
-          /Student:\s*(?:\*\*)?([a-zA-Z\s]+?)(?:\*\*)?(?:\n|$)/i,
-          /(?:student\s+(?:record\s+)?(?:for|named?|is)\s*)(?:\*\*)?([a-zA-Z\s]+?)(?:\*\*)?(?=\.|,|\n| The| the| They| they| He| he| She| she| it| is| was|$)/i,
-          /found\s+(?:the\s+)?(?:student\s+)?(?:record\s+for\s+)?(?:\*\*)?([a-zA-Z\s]+?)(?:\*\*)?(?=\.|,|\n| The| the| They| they| He| he| She| she| it| is| was|$)/i,
-          /^(?:\*\*)?([a-zA-Z\s]+?)(?:\*\*)?\s+(?:is a|is an|teaches|is currently|is enrolled|has an?)/i,
-          /(?:\*\*)?([a-zA-Z\s]+?)(?:\*\*)?'s\s+(?:profile|attendance|report|details)/i,
-          /\*\*([a-zA-Z\s]+?)\*\*/,
-        ];
-
-        const skipWords = ['the', 'here', 'this', 'however', 'based', 'unfortunately', 'overall', 'dear', 'please', 'today', 'since', 'smart', 'error', 'student', 'teacher', 'mla', 'academy', 'i', 'as', 'there', 'no', 'what', 'error:'];
-
-        // Scan up to 3 previous assistant messages to recover context if the very last one was an error/no-results
-        for (let i = assistantMsgs.length - 1; i >= Math.max(0, assistantMsgs.length - 3); i--) {
-          const replyText = assistantMsgs[i].content || '';
-
-          let foundInThisMessage = false;
-          for (const p of namePatterns) {
-            const m = replyText.match(p);
-            if (m && m[1] && m[1].length > 2 && !skipWords.includes(m[1].split(' ')[0].toLowerCase())) {
-              lastPersonName = m[1].trim();
-              if (replyText.toLowerCase().includes('teacher') || replyText.toLowerCase().includes('faculty') || replyText.toLowerCase().includes('teaches') || replyText.toLowerCase().includes('email')) {
-                lastPersonType = 'teacher';
-              } else {
-                lastPersonType = 'student';
-              }
-              foundInThisMessage = true;
-              break;
-            }
-          }
-          if (foundInThisMessage) break;
-        }
-      }
-
-      // Also check user's previous messages for "who is X" or "find X"
-      if (!lastPersonName) {
-        const userMsgs = conversationHistory.filter(m => m.role === 'user');
-        if (userMsgs.length > 0) {
-          const lastUserQ = userMsgs[userMsgs.length - 1].content || '';
-          const userNameMatch = lastUserQ.match(/(?:who\s+is|find|show|about)\s+(\w+(?:\s+\w+)?)/i);
-          if (userNameMatch && userNameMatch[1].length > 2) {
-            lastPersonName = userNameMatch[1].trim();
-            lastPersonName = lastPersonName.charAt(0).toUpperCase() + lastPersonName.slice(1).toLowerCase();
-          }
-        }
-      }
-
-      console.log(`📌 Context: lastPerson="${lastPersonName}", type="${lastPersonType}"`);
-
-      // STEP B: Resolve pronouns (his, her, he, she, their, them, this, that)
-      const hasPronoun = /\b(his|her|he|she|their|them|this student|this teacher|that student|that teacher|this|that)\b/i.test(lowerQuery);
-
-      if (hasPronoun && lastPersonName) {
-        // Replace pronouns with the actual name
-        let resolved = userQuery;
-
-        if (lowerQuery.includes('attendance') || lowerQuery.includes('report')) {
-          resolved = `Show attendance report for ${lastPersonName}`;
-        } else if (lowerQuery.includes('class') || lowerQuery.includes('took') || lowerQuery.includes('teach')) {
-          if (lastPersonType === 'teacher') {
-            resolved = `Which classes did ${lastPersonName} take today`;
-          } else {
-            resolved = `Show attendance report for ${lastPersonName}`;
-          }
-        } else if (lowerQuery.includes('subject')) {
-          resolved = `What subjects does ${lastPersonName} teach`;
-        } else if (lowerQuery.includes('detail') || lowerQuery.includes('info')) {
-          resolved = `Show details for ${lastPersonName}`;
-        } else {
-          // Generic: replace pronoun with name
-          resolved = lowerQuery
-            .replace(/\b(his|her|their)\b/gi, `${lastPersonName}'s`)
-            .replace(/\b(he|she|them|this student|this teacher|that student|that teacher|this|that)\b/gi, lastPersonName);
-        }
-
-        resolvedQuery = resolved;
-        console.log(`🔄 Pronoun resolved: "${userQuery}" -> "${resolvedQuery}"`);
-      }
-
-      // STEP C: Handle explicit follow-up patterns like "what about X", "and for X"
-      if (!hasPronoun) {
-        const followUpPatterns = [
-          /^(?:what about|how about|and for|also|same for|check for|show for|now for|now check)\s+(.+)/i,
-        ];
-
-        for (const pattern of followUpPatterns) {
-          const match = lowerQuery.match(pattern);
-          if (match && match[1]) {
-            const newSubject = match[1].trim();
-            const lastUserMessages = conversationHistory.filter(m => m.role === 'user');
-            if (lastUserMessages.length > 0) {
-              const lastQuestion = (lastUserMessages[lastUserMessages.length - 1].content || '').toLowerCase();
-
-              if (lastQuestion.includes('attendance') || lastQuestion.includes('report')) {
-                resolvedQuery = `Show attendance report for ${newSubject}`;
-              } else if (lastQuestion.includes('subject') || lastQuestion.includes('course')) {
-                resolvedQuery = `Show subjects for ${newSubject}`;
-              } else {
-                resolvedQuery = `Show details for ${newSubject}`;
-              }
-              console.log(`🔄 Follow-up resolved: "${userQuery}" -> "${resolvedQuery}"`);
-            }
-            break;
-          }
-        }
-      }
-
-      // STEP D: Handle affirmative responses (yes, sure, ok, yeah)
-      const affirmatives = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'yea', 'ya', 'y', 'please', 'go ahead', 'do it'];
-      if (affirmatives.includes(lowerQuery.replace(/[!.?,]/g, '').trim())) {
-        // Check what the AI last suggested from the structured history
-        const lastMsg = conversationHistory.filter(m => m.role === 'assistant').pop();
-        const lastAI = lastMsg?.content || '';
-
-        // If the backend sent structured suggestions and frontend stored them
-        if (lastMsg && lastMsg.suggestions && lastMsg.suggestions.length > 0) {
-          resolvedQuery = lastMsg.suggestions[0];
-          console.log(`🔄 Affirmative resolved to dynamic JSON suggestion: "${userQuery}" -> "${resolvedQuery}"`);
-        } else if (lastPersonName) {
-          // Fallback standard affirmative logic
-          const lastAILower = lastAI.toLowerCase();
-          if (lastAILower.includes('attendance') || lastAILower.includes('report') || lastAILower.includes('academic performance')) {
-            resolvedQuery = `Show attendance report for ${lastPersonName}`;
-          } else if (lastAILower.includes('subject') || lastAILower.includes('class')) {
-            resolvedQuery = `Show subjects for ${lastPersonName}`;
-          } else if (lastAILower.includes('detail') || lastAILower.includes('more info')) {
-            resolvedQuery = `Show details for ${lastPersonName}`;
-          } else {
-            resolvedQuery = `Show attendance report for ${lastPersonName}`;
-          }
-          console.log(`🔄 Affirmative resolved with fallback: "${userQuery}" -> "${resolvedQuery}"`);
-        }
-      }
-    }
-
-    // Handle simple greetings without API call
     const greetings = ['hi', 'hello', 'hey', 'hii', 'hiii', 'good morning', 'good afternoon', 'good evening', 'namaste', 'yo', 'sup', 'howdy'];
     if (greetings.includes(lowerQuery) || greetings.some(g => lowerQuery === g + '!' || lowerQuery === g + '.')) {
       return res.json({
         success: true,
-        answer: "Hello! I'm your MLA Academy AI assistant. I can help you with:\n\n- **Student search** — Find students by name, ID, or stream\n- **Attendance reports** — Detailed attendance breakdown per subject\n- **Teacher info** — Teacher details, subjects they teach\n- **Statistics** — Counts, comparisons, and analytics\n\nWhat would you like to know?",
-        queryInfo: { collection: null, operation: null, explanation: 'Greeting response' }
+        answer: "Hello! I'm SAAME, the academic assistant for MLA Academy.\n\nI can help you with:\n\n- **Student search** — Find by name, ID, or stream\n- **Attendance reports** — Per subject breakdown\n- **Teacher info** — Details, subjects, mentees\n- **Analytics** — Top performers, defaulters, comparisons\n- **Academic policies** — Attendance rules, NAAC info\n\nWhat would you like to know?",
+        queryInfo: { collection: null, operation: null, explanation: 'Greeting' },
+        suggestions: ['List all students', 'Show defaulters', 'Today\'s attendance'],
+        resultCount: 0
       });
     }
 
-    // Handle thank you / goodbye without API call
     const thankPatterns = ['thank', 'thanks', 'thank you', 'thankyou', 'thx', 'ty', 'great', 'awesome', 'perfect', 'got it', 'understood', 'cool', 'nice'];
     if (thankPatterns.some(p => lowerQuery === p || lowerQuery === p + '!' || lowerQuery === p + '.')) {
       return res.json({
         success: true,
-        answer: "You're welcome! Feel free to ask me anything else about students, attendance, teachers, or subjects.",
-        queryInfo: { collection: null, operation: null, explanation: 'Thank you response' }
+        answer: "You're welcome! Feel free to ask anything else about students, attendance, teachers, or academic policies.",
+        queryInfo: { collection: null, operation: null, explanation: 'Thanks response' },
+        resultCount: 0
       });
     }
 
@@ -264,233 +57,510 @@ router.post('/chat', async (req, res) => {
     if (goodbyePatterns.some(p => lowerQuery === p || lowerQuery === p + '!' || lowerQuery === p + '.')) {
       return res.json({
         success: true,
-        answer: "Goodbye! Have a great day. I'm always here when you need help with academic queries.",
-        queryInfo: { collection: null, operation: null, explanation: 'Goodbye response' }
+        answer: "Goodbye! Have a great day. Come back anytime you need academic information.",
+        queryInfo: { collection: null, operation: null, explanation: 'Goodbye' },
+        resultCount: 0
       });
     }
 
-    // Handle help requests
     const helpPatterns = ['help', 'help me', 'what can you do', 'what do you do', 'how to use', 'commands', 'features'];
     if (helpPatterns.some(p => lowerQuery === p || lowerQuery === p + '?' || lowerQuery === p + '!')) {
       return res.json({
         success: true,
-        answer: "## How I Can Help\n\nHere are some things you can ask me:\n\n### Student Queries\n- \"Find student Amrutha\" or \"Who is Rahul?\"\n- \"List BCA semester 5 students\"\n- \"How many students in BBA?\"\n\n### Attendance\n- \"Amrutha's attendance\" or \"Attendance report for Rahul\"\n- \"Today's classes\" or \"Attendance on 15-01-2026\"\n- \"Students with low attendance\"\n- \"Who was absent today?\"\n\n### Teachers & Subjects\n- \"List all teachers\" or \"Who teaches Computer Science?\"\n- \"BCA semester 5 subjects\"\n- \"Who is the mentor for Amrutha?\"\n\n### Analytics\n- \"Most attended subjects\"\n- \"Students with 100% attendance\"\n- \"Compare BCA vs BBA attendance\"",
-        queryInfo: { collection: null, operation: null, explanation: 'Help response' }
-      });
-    }
-
-    // Step 1: Generate MongoDB query (use resolved query for follow-ups)
-    const queryInfo = await queryGenerator.generateMongoQuery(resolvedQuery);
-    console.log('Generated Query:', JSON.stringify(queryInfo, null, 2));
-
-    // Check if this is a greeting or non-database query
-    if (!queryInfo.collection || queryInfo.collection === null || queryInfo.operation === null) {
-      console.log('Non-database query detected');
-
-      // Inject current date/time for context
-      const now = new Date();
-      const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-      const timeStr = now.toLocaleTimeString('en-US');
-
-      // Use conversation history for context-aware responses
-      const conversationalResponse = await geminiService.generateResponseWithHistory(`
-You are the AI assistant for MLA Academy of Higher Learning. The user said: "${userQuery}"
-
-Context: Today is ${dateStr}, ${timeStr}. Only mention date/time if the user asks about it.
-
-You handle academic queries about:
-- Student records (search by name, ID, stream, semester)
-- Attendance reports and analytics
-- Teacher information and subjects
-- College statistics and comparisons
-
-INSTRUCTIONS:
-- Keep responses concise (2-3 sentences for general chat)
-- If the user asks something you can help with, guide them with a specific example query
-- If it's a general knowledge question unrelated to the college, politely say you specialize in academic queries
-- DO NOT use emojis
-- Be professional but warm
-      `, conversationHistory);
-
-      return res.json({
-        success: true,
-        answer: conversationalResponse.trim(),
-        queryInfo: {
-          collection: null,
-          operation: null,
-          explanation: queryInfo.explanation || 'Conversational response'
-        },
+        answer: `## What I Can Help With\n\n### Student Queries\n- "Find student Amrutha"\n- "List BCA semester 5 students"\n- "How many students in BBA?"\n\n### Attendance\n- "Amrutha's attendance"\n- "Today's classes"\n- "Who was absent on 15-01-2026?"\n- "Students with low attendance"\n- "Top 10 performers"\n\n### Teachers & Subjects\n- "List all teachers"\n- "Who teaches Computer Science?"\n- "BCA semester 5 subjects"\n- "Who is the mentor for Amrutha?"\n\n### Analytics\n- "Most attended subjects"\n- "Students with 100% attendance"\n- "Compare Amrutha with class average"\n\n### Academic Policies\n- "What is the attendance rule?"\n- "What is NAAC?"\n- "How does condonation work?"`,
+        queryInfo: { collection: null, operation: null, explanation: 'Help response' },
         resultCount: 0
       });
     }
 
     // ================================================================
-    // SMART CONTEXT INJECTION: If conversation is about a teacher,
-    // add teacherName filter to attendance queries BEFORE execution
+    // NUMERIC SELECTION — User types "1", "2" to pick from results
     // ================================================================
+
+    const numericPick = lowerQuery.match(/^(\d{1,2})\.?$/);
+    if (numericPick && conversationHistory.length > 0) {
+      const selectedNum = parseInt(numericPick[1]);
+      const lastAssistantMsg = [...conversationHistory].reverse().find(m => m.role === 'assistant');
+
+      if (lastAssistantMsg?.content) {
+        // Parse Markdown table rows to extract names
+        const tableRows = lastAssistantMsg.content.split('\n');
+        const entries = [];
+
+        for (const row of tableRows) {
+          const cells = row.split('|').map(c => c.trim()).filter(c => c.length > 0);
+          if (cells.length >= 3 && /^\d+$/.test(cells[0])) {
+            const rowNum = parseInt(cells[0]);
+            let name;
+            // Student tables: | # | ID | NAME | ...  (ID is alphanumeric 8+ chars)
+            // Teacher tables: | # | NAME | EMAIL | ...
+            if (/^[A-Z0-9]{8,}$/i.test(cells[1])) {
+              name = cells[2]; // skip ID column
+            } else {
+              name = cells[1]; // name is second column
+            }
+            name = name.replace(/\*\*/g, '').trim();
+            if (rowNum > 0 && name.length > 2) {
+              entries.push({ num: rowNum, name });
+            }
+          }
+        }
+
+        const selected = entries.find(e => e.num === selectedNum);
+        if (selected) {
+          console.log(`🔢 [Pick] #${selectedNum} → "${selected.name}" → attendance report`);
+
+          try {
+            const queryInfo = queryGenerator.buildStudentAttendanceQuery(selected.name);
+            const queryResults = await queryGenerator.executeQuery(queryInfo);
+
+            let answer;
+            if (queryResults && Array.isArray(queryResults) && queryResults.length > 0) {
+              answer = queryGenerator.formatAttendanceReport(queryResults);
+            } else {
+              // Student found but no attendance — try showing basic info
+              const { getDB } = require('../config/database');
+              const db = getDB();
+              const words = selected.name.split(/\s+/).filter(w => w.length > 0);
+              const nameRegex = words.length > 1
+                ? words.map(w => `(?=.*${w})`).join('')
+                : selected.name;
+              const studentInfo = await db.collection('students').findOne({
+                name: { $regex: nameRegex, $options: 'i' }, isActive: true
+              });
+
+              if (studentInfo) {
+                answer = `## ${studentInfo.name}\n\n**ID:** ${studentInfo.studentID} | **Stream:** ${studentInfo.stream} | **Semester:** ${studentInfo.semester}\n\nNo attendance records found for this student yet.`;
+              } else {
+                answer = `## ${selected.name}\n\nNo attendance records found for this student.`;
+              }
+            }
+
+            return res.json({
+              success: true,
+              answer,
+              queryInfo: {
+                collection: 'students',
+                operation: 'aggregate',
+                explanation: `Attendance for ${selected.name}`
+              },
+              resultCount: queryResults?.length || 0
+            });
+          } catch (pickErr) {
+            console.error('🔢 Numeric pick error:', pickErr.message);
+            // Fall through to normal flow
+          }
+        }
+      }
+    }
+
+    // ================================================================
+    // STEP 1: INTENT CLASSIFICATION
+    // General question → Groq with college knowledge base
+    // DB question → MongoDB pipeline
+    // ================================================================
+
+    const intent = await aiService.classifyIntentWithAI(userQuery);
+    console.log(`🎯 INTENT: ${intent}`);
+
+    if (intent === 'general') {
+      console.log(`📚 General question — answering from knowledge base`);
+      try {
+        const generalAnswer = await aiService.answerGeneralQuestion(userQuery, conversationHistory);
+        return res.json({
+          success: true,
+          answer: generalAnswer,
+          queryInfo: { collection: null, operation: null, explanation: 'General knowledge response' },
+          resultCount: 0
+        });
+      } catch (generalErr) {
+        console.error('General question handler failed:', generalErr.message);
+        return res.json({
+          success: true,
+          answer: "I'm not sure about that. For academic policies and procedures, please check with the administration. For student or attendance data, try asking a specific query like 'show BCA students' or 'show attendance for today'.",
+          queryInfo: { collection: null, operation: null, explanation: 'General fallback' },
+          resultCount: 0
+        });
+      }
+    }
+
+    // ================================================================
+    // STEP 2: RESOLVE FOLLOW-UPS & PRONOUNS
+    // ================================================================
+
+    let resolvedQuery = userQuery;
+
+    if (conversationHistory.length > 0) {
+      let lastPersonName = null;
+      let lastPersonType = null;
+
+      // Extract last discussed person from assistant messages
+      const assistantMsgs = conversationHistory.filter(m => m.role === 'assistant');
+      if (assistantMsgs.length > 0) {
+        const namePatterns = [
+          /^##\s+(?:\*\*)?([a-zA-Z][a-zA-Z.\s]+?)(?:\*\*)?$/m,
+          /Name:\s*(?:\*\*)?([a-zA-Z][a-zA-Z.\s]+?)(?:\*\*)?(?:\n|$)/i,
+          /Student:\s*(?:\*\*)?([a-zA-Z][a-zA-Z.\s]+?)(?:\*\*)?(?:\n|$)/i,
+          /(?:student\s+(?:record\s+)?(?:for|named?|is)\s*)(?:\*\*)?([a-zA-Z][a-zA-Z.\s]+?)(?:\*\*)?(?=\.|,|\n| The| the| They| they|$)/i,
+          /found\s+(?:the\s+)?(?:student\s+)?(?:record\s+for\s+)?(?:\*\*)?([a-zA-Z][a-zA-Z.\s]+?)(?:\*\*)?(?=\.|,|\n|$)/i,
+          /^(?:\*\*)?([a-zA-Z][a-zA-Z.\s]+?)(?:\*\*)?(?:\s+(?:is a|is an|teaches|is currently|is enrolled|has an?))/im,
+          /\*\*([a-zA-Z][a-zA-Z.\s]+?)\*\*/,
+        ];
+
+        const skipWords = ['the', 'here', 'this', 'however', 'based', 'unfortunately', 'overall', 'dear', 'please', 'today', 'since', 'smart', 'error', 'student', 'teacher', 'mla', 'academy', 'i', 'as', 'there', 'no', 'what', 'error:', 'found', 'hello', 'attendance', 'subjects', 'email', 'id', 'stream', 'semester', 'name'];
+
+        for (let i = assistantMsgs.length - 1; i >= Math.max(0, assistantMsgs.length - 3); i--) {
+          const replyText = assistantMsgs[i].content || '';
+          let foundInMsg = false;
+
+          for (const p of namePatterns) {
+            const m = replyText.match(p);
+            if (m && m[1] && m[1].trim().length > 2 && !skipWords.includes(m[1].split(/[\s.]/)[0].toLowerCase())) {
+              lastPersonName = m[1].trim();
+              const lowerReply = replyText.toLowerCase();
+              lastPersonType = (lowerReply.includes('teacher') ||
+                lowerReply.includes('teaches') ||
+                lowerReply.includes('faculty') ||
+                lowerReply.includes('email:') ||
+                lowerReply.includes('subjects (')) ? 'teacher' : 'student';
+              foundInMsg = true;
+              break;
+            }
+          }
+          if (foundInMsg) break;
+        }
+      }
+
+      // Also check user's recent messages
+      if (!lastPersonName) {
+        const userMsgs = conversationHistory.filter(m => m.role === 'user');
+        if (userMsgs.length > 0) {
+          const lastUserQ = userMsgs[userMsgs.length - 1].content || '';
+          const whoMatch = lastUserQ.match(/(?:who\s+is|find|show|about)\s+(\w+(?:\s+\w+)?)/i);
+          if (whoMatch && whoMatch[1].length > 2) {
+            lastPersonName = whoMatch[1].trim();
+            lastPersonName = lastPersonName.charAt(0).toUpperCase() + lastPersonName.slice(1).toLowerCase();
+          }
+        }
+      }
+
+      console.log(`📌 Context: lastPerson="${lastPersonName}", type="${lastPersonType}"`);
+
+      // Resolve pronouns
+      const hasPronoun = /\b(his|her|he|she|they|their|them|they're|this student|this teacher|that student|that teacher|this|that)\b/i.test(lowerQuery);
+
+      if (hasPronoun && lastPersonName) {
+        if (lowerQuery.includes('attendance') || lowerQuery.includes('report')) {
+          resolvedQuery = `Show attendance report for ${lastPersonName}`;
+        } else if (lowerQuery.includes('class') || lowerQuery.includes('took') || lowerQuery.includes('teach') || lowerQuery.includes('how many')) {
+          if (lastPersonType === 'teacher') {
+            if (lowerQuery.includes('each') || lowerQuery.includes('subject') || lowerQuery.includes('per')) {
+              resolvedQuery = `How many classes taken by ${lastPersonName}`;
+            } else {
+              resolvedQuery = `Which classes did ${lastPersonName} take today`;
+            }
+          } else {
+            resolvedQuery = `Show attendance report for ${lastPersonName}`;
+          }
+        } else if (lowerQuery.includes('subject')) {
+          resolvedQuery = `What subjects does ${lastPersonName} teach`;
+        } else if (lowerQuery.includes('detail') || lowerQuery.includes('info')) {
+          resolvedQuery = `Show details for ${lastPersonName}`;
+        } else if (lowerQuery.includes('mentor')) {
+          resolvedQuery = `Who is the mentor for ${lastPersonName}`;
+        } else {
+          resolvedQuery = lowerQuery
+            .replace(/\b(his|her|their)\b/gi, `${lastPersonName}'s`)
+            .replace(/\b(he|she|they|they're|them|this student|this teacher|that student|that teacher|this|that)\b/gi, lastPersonName);
+        }
+        console.log(`🔄 Pronoun resolved: "${userQuery}" → "${resolvedQuery}"`);
+      }
+
+      // Resolve follow-up patterns
+      if (!hasPronoun) {
+        const followUpPatterns = [
+          /^(?:what about|how about|and for|also|same for|check for|show for|now for|now check)\s+(.+)/i,
+        ];
+        let followUpResolved = false;
+        for (const pattern of followUpPatterns) {
+          const match = lowerQuery.match(pattern);
+          if (match && match[1]) {
+            const newSubject = match[1].trim();
+            const lastUserMsgs = conversationHistory.filter(m => m.role === 'user');
+            if (lastUserMsgs.length > 0) {
+              const lastQ = (lastUserMsgs[lastUserMsgs.length - 1].content || '').toLowerCase();
+              if (lastQ.includes('attendance') || lastQ.includes('report')) {
+                resolvedQuery = `Show attendance report for ${newSubject}`;
+              } else if (lastQ.includes('subject') || lastQ.includes('course')) {
+                resolvedQuery = `Show subjects for ${newSubject}`;
+              } else {
+                resolvedQuery = `Show details for ${newSubject}`;
+              }
+              console.log(`🔄 Follow-up resolved: "${userQuery}" → "${resolvedQuery}"`);
+              followUpResolved = true;
+            }
+            break;
+          }
+        }
+
+        // Contextual follow-up: implicit references to previously discussed person
+        // e.g. "how many classes took for each subjects" when teacher was just discussed
+        if (!followUpResolved && lastPersonName && resolvedQuery === userQuery) {
+          const isAboutClasses = lowerQuery.match(/(?:how many|total|number of)\s+(?:classes|sessions|lectures)|classes\s+(?:took|taken|conducted|held)/i);
+          const isAboutSubjects = lowerQuery.match(/(?:which|what|list)\s+subjects?|subjects?\s+(?:taught|assigned|teach)/i);
+          const isAboutTeaching = lowerQuery.match(/(?:teach|taught|took|taken|conducted)/i);
+          const hasNoName = !lowerQuery.match(/(?:for|by|of)\s+(?:ms|mr|mrs|dr|prof)?\.?\s*[A-Z][a-z]+/i);
+
+          if (hasNoName && lastPersonType === 'teacher') {
+            if (isAboutClasses || (isAboutTeaching && (lowerQuery.includes('each') || lowerQuery.includes('subject') || lowerQuery.includes('per')))) {
+              resolvedQuery = `How many classes taken by ${lastPersonName}`;
+              console.log(`🔄 Context follow-up (teacher classes): "${userQuery}" → "${resolvedQuery}"`);
+            } else if (isAboutSubjects) {
+              resolvedQuery = `What subjects does ${lastPersonName} teach`;
+              console.log(`🔄 Context follow-up (teacher subjects): "${userQuery}" → "${resolvedQuery}"`);
+            }
+          } else if (hasNoName && lastPersonType === 'student') {
+            if (isAboutClasses || isAboutTeaching) {
+              resolvedQuery = `Show attendance report for ${lastPersonName}`;
+              console.log(`🔄 Context follow-up (student attendance): "${userQuery}" → "${resolvedQuery}"`);
+            } else if (isAboutSubjects) {
+              resolvedQuery = `Show subjects for ${lastPersonName}`;
+              console.log(`🔄 Context follow-up (student subjects): "${userQuery}" → "${resolvedQuery}"`);
+            }
+          }
+        }
+      }
+
+      // Resolve affirmatives
+      const affirmatives = ['yes', 'yeah', 'yep', 'sure', 'ok', 'okay', 'yea', 'ya', 'y', 'please', 'go ahead', 'do it'];
+      if (affirmatives.includes(lowerQuery.replace(/[!.?,]/g, '').trim())) {
+        const lastMsg = conversationHistory.filter(m => m.role === 'assistant').pop();
+        if (lastMsg?.suggestions?.length > 0) {
+          resolvedQuery = lastMsg.suggestions[0];
+          console.log(`🔄 Affirmative → suggestion: "${resolvedQuery}"`);
+        } else if (lastPersonName) {
+          resolvedQuery = `Show attendance report for ${lastPersonName}`;
+          console.log(`🔄 Affirmative → attendance for: "${lastPersonName}"`);
+        }
+      }
+    }
+
+    // ================================================================
+    // STEP 3: GENERATE MONGODB QUERY
+    // ================================================================
+
+    let queryInfo;
+    try {
+      queryInfo = await queryGenerator.generateMongoQuery(resolvedQuery);
+      console.log(`📋 QUERY: collection=${queryInfo.collection} operation=${queryInfo.operation}`);
+    } catch (queryGenErr) {
+      console.error('Query generation failed:', queryGenErr.message);
+      return res.json({
+        success: true,
+        answer: `I had trouble understanding that query. Could you rephrase it?\n\n**Examples:**\n- "List all BCA students"\n- "Show ${resolvedQuery.split(' ')[0]}'s attendance"\n- "Today's classes"`,
+        queryInfo: { collection: null, operation: null, explanation: 'Query generation failed' },
+        resultCount: 0
+      });
+    }
+
+    // If query generator returned null collection, it's a general question
+    if (!queryInfo.collection || queryInfo.collection === null) {
+      console.log(`📚 Query returned null — routing to general handler`);
+      try {
+        const generalAnswer = await aiService.answerGeneralQuestion(userQuery, conversationHistory);
+        return res.json({
+          success: true,
+          answer: generalAnswer,
+          queryInfo: { collection: null, operation: null, explanation: 'General response' },
+          resultCount: 0
+        });
+      } catch (e) {
+        return res.json({
+          success: true,
+          answer: queryInfo.explanation || "Hello! Ask me anything about students, attendance, teachers, or academic policies.",
+          queryInfo,
+          resultCount: 0
+        });
+      }
+    }
+
+    // ================================================================
+    // STEP 4: CONTEXT INJECTION FOR TEACHER-BASED QUERIES
+    // ================================================================
+
     if (queryInfo.collection === 'attendance' && queryInfo.operation === 'find' && conversationHistory.length > 0) {
-      // Extract teacher name from conversation context
       let contextTeacher = null;
 
-      // Check recent assistant messages for teacher info
       const recentAssistant = [...conversationHistory].reverse().find(m => m.role === 'assistant');
-      if (recentAssistant && recentAssistant.content) {
-        // Look for bold names or "teacher" mentions
+      if (recentAssistant?.content) {
         const patterns = [
           /\*\*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\*\*/,
-          /(?:Dr\.\s*)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:is a|teaches|is associated|is an?\s)/i,
-          /(?:teacher|faculty|professor)\s*:?\s*(?:Dr\.\s*)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+          /(?:Dr\.\s*)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:is a|teaches|is associated)/i,
         ];
+        const skipWords = ['The', 'Here', 'This', 'However', 'Based', 'Unfortunately', 'Overall', 'Dear', 'Please', 'Found', 'No', 'What'];
         for (const p of patterns) {
           const m = recentAssistant.content.match(p);
-          if (m && m[1] && m[1].length > 2 && !['The', 'Here', 'This', 'However', 'Based', 'Unfortunately', 'Overall', 'Dear', 'Please'].includes(m[1])) {
+          if (m && m[1] && m[1].length > 2 && !skipWords.includes(m[1].split(' ')[0])) {
             contextTeacher = m[1].trim();
             break;
           }
         }
       }
 
-      // Also check user's previous messages
-      if (!contextTeacher) {
-        const userMsgs = conversationHistory.filter(m => m.role === 'user');
-        for (let i = userMsgs.length - 1; i >= Math.max(0, userMsgs.length - 2); i--) {
-          const msg = userMsgs[i].content.toLowerCase();
-          // Check if user mentioned "who is X" pattern
-          const whoMatch = msg.match(/who\s+is\s+(\w+)/i);
-          if (whoMatch) {
-            contextTeacher = whoMatch[1].charAt(0).toUpperCase() + whoMatch[1].slice(1);
-            break;
-          }
-        }
-      }
-
-      // Inject the teacher filter into the query
-      if (contextTeacher && (lowerQuery.includes('class') || lowerQuery.includes('took') || lowerQuery.includes('teach') || lowerQuery.includes('he ') || lowerQuery.includes('she ') || lowerQuery.includes('his ') || lowerQuery.includes('her ') || lowerQuery.includes('kamala') || lowerQuery.includes('today'))) {
-        console.log(`🎯 Context injection: Looking up teacher "${contextTeacher}" for attendance filter`);
-
-        // Look up the teacher's email from the teachers collection
+      if (contextTeacher && (lowerQuery.includes('class') || lowerQuery.includes('took') ||
+        lowerQuery.includes('his ') || lowerQuery.includes('her ') || lowerQuery.includes('today'))) {
+        console.log(`🎯 Context injection for teacher: "${contextTeacher}"`);
         try {
           const { getDB } = require('../config/database');
           const db = getDB();
-          const teacher = await db.collection('teachers').findOne({
-            name: { $regex: contextTeacher, $options: 'i' }
-          });
-
-          if (teacher && teacher.email) {
-            console.log(`✅ Found teacher email: ${teacher.email}`);
+          const teacher = await db.collection('teachers').findOne({ name: { $regex: contextTeacher, $options: 'i' } });
+          if (teacher?.email) {
             const teacherFilter = {
               $or: [
                 { teacherEmail: { $regex: teacher.email, $options: 'i' } },
                 { teacherName: { $regex: contextTeacher, $options: 'i' } }
               ]
             };
-
             if (typeof queryInfo.query === 'object' && !Array.isArray(queryInfo.query)) {
               Object.assign(queryInfo.query, teacherFilter);
-            } else if (Array.isArray(queryInfo.query)) {
-              const matchStage = queryInfo.query.find(s => s.$match);
-              if (matchStage) {
-                Object.assign(matchStage.$match, teacherFilter);
-              } else {
-                queryInfo.query.unshift({ $match: teacherFilter });
-              }
-            }
-          } else {
-            console.log(`⚠️ Teacher "${contextTeacher}" not found in teachers collection, using name filter`);
-            // Fallback: try both fields
-            const fallbackFilter = {
-              $or: [
-                { teacherName: { $regex: contextTeacher, $options: 'i' } },
-                { teacherEmail: { $regex: contextTeacher, $options: 'i' } }
-              ]
-            };
-            if (typeof queryInfo.query === 'object' && !Array.isArray(queryInfo.query)) {
-              Object.assign(queryInfo.query, fallbackFilter);
             }
           }
-        } catch (lookupErr) {
-          console.log(`⚠️ Teacher lookup failed:`, lookupErr.message);
+        } catch (e) {
+          console.log(`⚠️ Context injection failed:`, e.message);
         }
       }
     }
 
-    // Step 2: Execute the database query
+    // ================================================================
+    // STEP 5: EXECUTE QUERY
+    // ================================================================
+
     let queryResults;
     try {
       queryResults = await queryGenerator.executeQuery(queryInfo);
-      console.log('Query Results:', Array.isArray(queryResults) ? `${queryResults.length} records` : queryResults);
+      console.log(`📊 RESULTS: ${Array.isArray(queryResults) ? queryResults.length + ' records' : queryResults}`);
     } catch (executeError) {
-      console.error('Query execution failed:', executeError);
+      const errMsg = executeError.message;
+      console.error('Query execution failed:', errMsg);
 
-      const errorMsg = executeError.message;
-
-      // No attendance records exist for stream/semester
-      if (errorMsg.startsWith('NO_ATTENDANCE_RECORDS:')) {
-        const [, studentName, stream, semester] = errorMsg.split(':');
+      if (errMsg.startsWith('NO_ATTENDANCE_RECORDS:')) {
+        const [, studentName, stream, semester] = errMsg.split(':');
         return res.json({
           success: true,
-          answer: `## Student Found: ${studentName}\n\nStream: ${stream} | Semester: ${semester}\n\n## No Classes Conducted Yet\n\nThere are no attendance records for ${stream} semester ${semester}. This means:\n\n- No classes have been conducted for this stream/semester\n- Attendance marking hasn't started yet\n- The semester may not have begun\n\n### What you can do:\n\n- Check other semesters\n- View subjects for this stream\n- See all students in this stream\n- View recent classes`,
-          queryInfo: {
-            collection: queryInfo.collection,
-            operation: queryInfo.operation,
-            explanation: 'No attendance records for stream/semester'
-          },
+          answer: `## Student Found: ${studentName}\n\n**Stream:** ${stream} | **Semester:** ${semester}\n\n## No Classes Conducted Yet\n\nThere are no attendance records for ${stream} Semester ${semester}. Classes may not have started for this stream/semester yet.\n\n**Try:**\n- Check another semester\n- View subjects for this stream\n- See recent classes`,
+          queryInfo: { collection: queryInfo.collection, operation: queryInfo.operation, explanation: 'No attendance records' },
           resultCount: 0
         });
       }
 
-      // Student exists but has no attendance
-      if (errorMsg.startsWith('STUDENT_EXISTS_NO_ATTENDANCE:')) {
-        const [, studentName, stream, semester, studentID] = errorMsg.split(':');
+      if (errMsg.startsWith('STUDENT_EXISTS_NO_ATTENDANCE:')) {
+        const [, studentName, stream, semester, studentID] = errMsg.split(':');
         return res.json({
           success: true,
-          answer: `## Student Found: ${studentName}\n\nStudent ID: ${studentID}\nStream: ${stream} | Semester: ${semester}\n\n## No Attendance Records\n\nThis student is registered in the system but hasn't attended any classes yet, or attendance wasn't marked when they were present.\n\n### Possible Reasons:\n\n- The student hasn't attended any classes\n- Attendance wasn't marked when student was present\n- The student is newly enrolled\n- Classes haven't started yet\n\n### Suggestions:\n\n- Check all ${stream} students\n- View subjects for this stream\n- Check recent classes\n- Try another student name`,
-          queryInfo: {
-            collection: queryInfo.collection,
-            operation: queryInfo.operation,
-            explanation: 'Student found but no attendance records'
-          },
+          answer: `## Student Found: ${studentName}\n\n**ID:** ${studentID} | **Stream:** ${stream} | **Semester:** ${semester}\n\n## No Attendance Records\n\nThis student is registered but has no attendance recorded yet. They may not have attended any classes, or attendance marking hasn't started.\n\n**Try:**\n- Check all ${stream} students\n- View recent classes\n- Check subjects for this stream`,
+          queryInfo: { collection: queryInfo.collection, operation: queryInfo.operation, explanation: 'Student found, no attendance' },
           resultCount: 0
         });
       }
 
-      // Student not found
-      if (errorMsg.startsWith('STUDENT_NOT_FOUND:')) {
-        const studentName = errorMsg.split(':')[1];
+      if (errMsg.startsWith('STUDENT_NOT_FOUND:')) {
+        const studentName = errMsg.split(':')[1];
+        try {
+          const { getDB } = require('../config/database');
+          const db = getDB();
+          const fuzzy = await db.collection('students')
+            .find({ name: { $regex: studentName.split(' ')[0], $options: 'i' }, isActive: true })
+            .limit(5).toArray();
+
+          if (fuzzy.length > 0) {
+            const suggestions = fuzzy.map(s => `- **${s.name}** (${s.stream} Sem ${s.semester})`).join('\n');
+            return res.json({
+              success: true,
+              answer: `## Student Not Found: "${studentName}"\n\nI couldn't find an exact match. Did you mean one of these?\n\n${suggestions}`,
+              queryInfo: { collection: 'students', operation: 'find', explanation: 'Fuzzy suggestions' },
+              resultCount: 0
+            });
+          }
+        } catch (e) { console.error('Fuzzy search failed:', e.message); }
+
         return res.json({
           success: true,
-          answer: `## Student Not Found: "${studentName}"\n\nI couldn't find a student with that name in the database.\n\n## Suggestions:\n\n### Check the spelling of the name\n- Make sure the name is spelled correctly\n- Try using just the first name or last name\n\n### Try using the student ID\n- Student IDs follow a specific pattern\n- Example: Search by ID if you know it\n\n### Search by stream\n- Show BBA students\n- List BCA semester 5 students\n\n### List all students\n- List all students\n- Show students in a specific stream\n\n## Example Queries:\n\n- Show students in BBA semester 5\n- List all students\n- Find student with ID U18ER23C0015`,
-          queryInfo: {
-            collection: queryInfo.collection,
-            operation: queryInfo.operation,
-            explanation: 'Student not found in database'
-          },
+          answer: `## Student Not Found: "${studentName}"\n\nNo student with that name exists in the system.\n\n**Suggestions:**\n- Check the spelling\n- Try just the first name or last name\n- Search by stream: "List BCA students"\n- List all: "Show all students"`,
+          queryInfo: { collection: 'students', operation: 'find', explanation: 'Student not found' },
           resultCount: 0
         });
       }
 
-      // Generic execution error
       return res.json({
         success: true,
-        answer: `## Database Query Error\n\nI encountered an error while searching the database.\n\nError Details:\n${executeError.message}\n\n## What to try:\n\n- Rephrase your question\n- Check your search criteria\n- Use more specific terms\n- Try a simpler query first\n\n## Examples:\n\n- List all students\n- Show BBA subjects\n- Today's attendance`,
-        queryInfo: {
-          collection: queryInfo.collection,
-          operation: queryInfo.operation,
-          explanation: 'Query execution failed'
-        },
+        answer: `## Query Error\n\nSomething went wrong while searching the database.\n\n**Error:** ${errMsg}\n\n**Try:**\n- Rephrase your question\n- Use simpler search terms\n- Example: "List all students" or "Today's attendance"`,
+        queryInfo: { collection: queryInfo.collection, operation: queryInfo.operation, explanation: 'Execution error' },
         resultCount: 0
       });
     }
 
     // ================================================================
-    // SMART AUTO-RETRY: If no results, try harder before giving up
+    // STEP 5.5: SUBJECT-WISE DEFAULTER RESPONSE
     // ================================================================
-    if (!queryResults ||
-      (Array.isArray(queryResults) && queryResults.length === 0)) {
 
-      console.log('⚠️ No results from initial query. Attempting smart retry...');
+    if (queryResults && queryResults._subjectWise) {
+      const { stream, semester, subjects, totalStudents, defaulterCount, students } = queryResults;
 
-      // Extract student name from the original query for retry
+      let answer = `## Subject-Wise Defaulters — ${stream} Semester ${semester}\n\n`;
+      answer += `**${defaulterCount}** out of **${totalStudents}** students have at least one subject below 75%.\n\n`;
+
+      if (students.length === 0) {
+        answer += `All students in ${stream} Semester ${semester} have 75%+ attendance in every subject.`;
+      } else {
+        // Build Markdown table with subject columns
+        // Use short subject names if too many columns
+        const shortNames = subjects.map(s => s.length > 15 ? s.substring(0, 13) + '..' : s);
+
+        answer += `| # | ID | NAME |`;
+        shortNames.forEach(s => { answer += ` ${s} |`; });
+        answer += `\n`;
+
+        answer += `| --- | --- | --- |`;
+        shortNames.forEach(() => { answer += ` --- |`; });
+        answer += `\n`;
+
+        students.forEach((student, idx) => {
+          answer += `| ${idx + 1} | ${student.studentID} | ${student.name} |`;
+          subjects.forEach(sub => {
+            const data = student.subjects[sub];
+            const pct = data ? data.percentage : 0;
+            const marker = pct < 75 ? `**${pct}%**` : `${pct}%`;
+            answer += ` ${marker} |`;
+          });
+          answer += `\n`;
+        });
+
+        // Summary insight
+        const avgDefaults = students.reduce((sum, s) => {
+          return sum + Object.values(s.subjects).filter(v => v.percentage < 75 && v.total > 0).length;
+        }, 0) / students.length;
+
+        answer += `\n*Values in bold are below 75%. Average defaulting subjects per student: ${avgDefaults.toFixed(1)}*`;
+      }
+
+      return res.json({
+        success: true,
+        answer,
+        queryInfo: {
+          collection: 'students',
+          operation: 'subjectWiseDefaulters',
+          explanation: queryInfo.explanation
+        },
+        resultCount: defaulterCount
+      });
+    }
+
+    // STEP 6: SMART RETRY IF NO RESULTS
+    // ================================================================
+
+    if (!queryResults || (Array.isArray(queryResults) && queryResults.length === 0)) {
+      console.log('⚠️ No results — attempting smart retry...');
+
       const namePatterns = [
         /(?:attendance|report|details|info)\s+(?:of|for)\s+(.+?)(?:\?|$)/i,
         /(?:show|find|get|search)\s+(.+?)(?:'s|\s+attendance|\s+report|\s+details|\?|$)/i,
@@ -509,132 +579,64 @@ INSTRUCTIONS:
       }
 
       if (retryName) {
-        console.log(`🔄 Smart retry: Searching database directly for "${retryName}"...`);
-
+        console.log(`🔄 Smart retry for: "${retryName}"`);
         try {
           const { getDB } = require('../config/database');
           const db = getDB();
 
-          // Direct fuzzy search in students collection with smart regex
-          let retryRegexPattern = retryName;
           const retryWords = retryName.split(/\s+/).filter(w => w.length > 0);
-          if (retryWords.length > 1) {
-            retryRegexPattern = retryWords.map(word => `(?=.*${word})`).join('');
-          }
+          const retryRegex = retryWords.length > 1
+            ? retryWords.map(w => `(?=.*${w})`).join('')
+            : retryName;
 
           const studentMatch = await db.collection('students').findOne({
-            name: { $regex: retryRegexPattern, $options: 'i' },
-            isActive: true
+            name: { $regex: retryRegex, $options: 'i' }, isActive: true
           });
 
           if (studentMatch) {
-            console.log(`✅ Smart retry found student: ${studentMatch.name}`);
-
-            // Now build and execute the attendance query using the pre-built template
-            const retryQueryInfo = queryGenerator.buildStudentAttendanceQuery
-              ? queryGenerator.buildStudentAttendanceQuery(studentMatch.name)
-              : {
-                collection: "students",
-                operation: "aggregate",
-                query: [
-                  { "$match": { "name": { "$regex": studentMatch.name, "$options": "i" }, "isActive": true } },
-                  { "$limit": 1 },
-                  {
-                    "$lookup": {
-                      "from": "attendance",
-                      "let": { "studentID": "$studentID", "stream": "$stream", "semester": "$semester" },
-                      "pipeline": [
-                        {
-                          "$match": {
-                            "$expr": {
-                              "$and": [
-                                { "$eq": ["$stream", "$$stream"] },
-                                { "$eq": ["$semester", "$$semester"] }
-                              ]
-                            }
-                          }
-                        },
-                        {
-                          "$group": {
-                            "_id": "$subject",
-                            "totalClasses": { "$sum": 1 },
-                            "attended": { "$sum": { "$cond": [{ "$in": ["$$studentID", "$studentsPresent"] }, 1, 0] } }
-                          }
-                        },
-                        {
-                          "$project": {
-                            "subject": "$_id", "totalClasses": 1,
-                            "classesAttended": "$attended",
-                            "attendancePercentage": { "$multiply": [{ "$divide": ["$attended", "$totalClasses"] }, 100] },
-                            "_id": 0
-                          }
-                        }
-                      ],
-                      "as": "attendance"
-                    }
-                  },
-                  { "$unwind": "$attendance" },
-                  { "$replaceRoot": { "newRoot": { "$mergeObjects": ["$attendance", { "studentName": "$name", "studentID": "$studentID", "stream": "$stream", "semester": "$semester" }] } } }
-                ],
-                explanation: `Complete attendance report for ${studentMatch.name}`
-              };
-
+            console.log(`✅ Smart retry found: ${studentMatch.name}`);
+            const retryQueryInfo = queryGenerator.buildStudentAttendanceQuery(studentMatch.name);
             const retryResults = await queryGenerator.executeQuery(retryQueryInfo);
 
             if (retryResults && Array.isArray(retryResults) && retryResults.length > 0) {
-              console.log(`✅ Smart retry succeeded! ${retryResults.length} results`);
-              // Use these results instead - continue to formatting below
               queryResults = retryResults;
               queryInfo.explanation = retryQueryInfo.explanation;
-              // Don't return - fall through to the response formatting below
+              console.log(`✅ Smart retry success: ${retryResults.length} results`);
             } else {
-              // Student exists but no attendance data
               return res.json({
                 success: true,
-                answer: `## Student Found: ${studentMatch.name}\n\nStudent ID: ${studentMatch.studentID}\nStream: ${studentMatch.stream} | Semester: ${studentMatch.semester}\n\n## No Attendance Records Yet\n\nThis student is registered but no attendance has been recorded yet.\n\n### Try:\n- Check all ${studentMatch.stream} students\n- View subjects for ${studentMatch.stream} Semester ${studentMatch.semester}`,
-                queryInfo: { collection: 'students', operation: 'find', explanation: 'Student found, no attendance' },
+                answer: `## Student Found: ${studentMatch.name}\n\n**ID:** ${studentMatch.studentID} | **Stream:** ${studentMatch.stream} | **Semester:** ${studentMatch.semester}\n\nThis student is registered but has no attendance records yet.\n\n**Try:**\n- Check all ${studentMatch.stream} students\n- View subjects for ${studentMatch.stream} Semester ${studentMatch.semester}`,
+                queryInfo: { collection: 'students', operation: 'find', explanation: 'Found, no attendance' },
                 resultCount: 0
               });
             }
           } else {
-            // Student not found - try fuzzy matching
-            const fuzzyResults = await db.collection('students').find({
-              name: { $regex: retryName.split(' ')[0], $options: 'i' },
-              isActive: true
-            }).limit(5).toArray();
+            // Fuzzy fallback suggestions
+            const fuzzy = await db.collection('students')
+              .find({ name: { $regex: retryName.split(' ')[0], $options: 'i' }, isActive: true })
+              .limit(5).toArray();
 
-            if (fuzzyResults.length > 0) {
-              const suggestions = fuzzyResults.map(s => `- **${s.name}** (${s.stream} Sem ${s.semester})`).join('\n');
+            if (fuzzy.length > 0) {
+              const suggestionList = fuzzy.map(s => `- **${s.name}** (${s.stream} Sem ${s.semester})`).join('\n');
               return res.json({
                 success: true,
-                answer: `## Student Not Found: "${retryName}"\n\nI couldn't find an exact match, but here are similar students:\n\n${suggestions}\n\nTry asking with the exact name from the list above.`,
-                queryInfo: { collection: 'students', operation: 'find', explanation: 'Fuzzy match suggestions' },
+                answer: `## No Exact Match for "${retryName}"\n\nDid you mean one of these?\n\n${suggestionList}\n\nTry using the exact name from the list above.`,
+                queryInfo: { collection: 'students', operation: 'find', explanation: 'Fuzzy suggestions' },
                 resultCount: 0
               });
             }
           }
-        } catch (retryError) {
-          console.error('Smart retry failed:', retryError.message);
+        } catch (retryErr) {
+          console.error('Smart retry failed:', retryErr.message);
         }
       }
 
-      // If we still have no results after retry, show the generic message
+      // Still no results
       if (!queryResults || (Array.isArray(queryResults) && queryResults.length === 0)) {
-        let noResultsMessage = `## No Results Found\n\nI couldn't find any records matching your search.\n\n`;
+        let noResultMsg = `## No Results Found\n\nI couldn't find any records matching your search.\n\n`;
 
         if (queryInfo.collection === 'students') {
-          noResultsMessage += `## Suggestions for Student Search:\n\n`;
-          noResultsMessage += `- Check the spelling of the student name\n`;
-          noResultsMessage += `- Try using the student ID\n`;
-          noResultsMessage += `- Search by stream: Show BCA students\n`;
-          noResultsMessage += `- Search by semester: List BBA semester 5 students\n`;
-          noResultsMessage += `- View all: List all students\n`;
-        } else if (queryInfo.collection === 'subjects') {
-          noResultsMessage += `## Suggestions for Subject Search:\n\n`;
-          noResultsMessage += `- Verify the stream name (BCA, BBA, BCOM)\n`;
-          noResultsMessage += `- Check the semester number (1-6)\n`;
-          noResultsMessage += `- Try: Show BBA semester 5 subjects\n`;
-          noResultsMessage += `- View all: List all subjects\n`;
+          noResultMsg += `**Suggestions:**\n- Check the spelling of the name\n- Try searching by stream: "Show BCA students"\n- List all: "Show all students"\n- Search by ID if you have it`;
         } else if (queryInfo.collection === 'attendance') {
           try {
             const { getDB } = require('../config/database');
@@ -650,132 +652,94 @@ INSTRUCTIONS:
                 const dateStr = d._id ? new Date(d._id).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : d._id;
                 return `- ${dateStr}`;
               }).join('\n');
-
-              noResultsMessage += `## No Attendance Records Found for This Date\n\n`;
-              noResultsMessage += `The date you searched doesn't have any attendance records.\n\n`;
-              noResultsMessage += `## Dates with Available Records:\n\n${dateList}\n\n`;
+              noResultMsg += `**No records for that date. Recent dates with data:**\n\n${dateList}`;
             } else {
-              noResultsMessage += `## No Attendance Records in Database\n\n`;
-              noResultsMessage += `There are no attendance records in the system yet.\n`;
+              noResultMsg += `No attendance records exist in the system yet.`;
             }
           } catch (e) {
-            noResultsMessage += `## Suggestions for Attendance Search:\n\n`;
-            noResultsMessage += `- Try: Show recent classes\n`;
-            noResultsMessage += `- For student report: Show [student name] attendance\n`;
+            noResultMsg += `**Suggestions:**\n- Try "Show recent classes"\n- Try "Today's attendance"\n- Check the date format (DD-MM-YYYY)`;
           }
+        } else if (queryInfo.collection === 'subjects') {
+          noResultMsg += `**Suggestions:**\n- Verify stream name (BCA, BBA, BCOM, BDA, MCA, MBA)\n- Check semester number (1-6)\n- Try: "Show BCA subjects"`;
         } else {
-          noResultsMessage += `## General Suggestions:\n\n`;
-          noResultsMessage += `- Try rephrasing your question\n`;
-          noResultsMessage += `- Use simpler terms\n`;
-          noResultsMessage += `- Try: List all students or Show all subjects\n`;
+          noResultMsg += `**Suggestions:**\n- Rephrase your question\n- Use simpler terms\n- Try: "List all students" or "Show all subjects"`;
         }
 
         return res.json({
           success: true,
-          answer: noResultsMessage,
-          queryInfo: {
-            collection: queryInfo.collection,
-            operation: queryInfo.operation,
-            explanation: 'No results found'
-          },
+          answer: noResultMsg,
+          queryInfo: { collection: queryInfo.collection, operation: queryInfo.operation, explanation: 'No results' },
           resultCount: 0
         });
       }
     }
 
     // ================================================================
-    // STEP 3: GENERATE ACCURATE RESPONSE (DATA-DRIVEN, NOT AI-HALLUCINATED)
+    // STEP 7: SMART FILTER FOR TEACHER CONTEXT
     // ================================================================
 
-    // Smart pre-filter: If conversation is about a specific teacher, filter results
     if (Array.isArray(queryResults) && queryResults.length > 0 && conversationHistory.length > 0) {
       const hasTeacherField = queryResults[0].teacherName || queryResults[0].teacherEmail;
-
       if (hasTeacherField) {
         let contextTeacherName = null;
-        const lastAssistantMsg = [...conversationHistory].reverse().find(m => m.role === 'assistant');
-
-        if (lastAssistantMsg && lastAssistantMsg.content) {
-          const teacherPatterns = [
-            /(?:Dr\.\s*)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:is a|teaches|is associated|is an)/i,
-            /(?:teacher|faculty|professor|dr\.?)\s*:?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
+        const lastAI = [...conversationHistory].reverse().find(m => m.role === 'assistant');
+        if (lastAI?.content) {
+          const patterns = [
             /\*\*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\*\*/,
+            /(?:teacher|faculty|professor)\s*:?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i,
           ];
-          const skipWords = ['The', 'Here', 'This', 'However', 'Based', 'Unfortunately', 'Overall', 'Dear', 'Please', 'Today', 'Since', 'Smart', 'Error', 'Student', 'Teacher', 'MLA', 'Academy', 'I', 'As', 'There', 'No', 'What'];
-          for (const pattern of teacherPatterns) {
-            const match = lastAssistantMsg.content.match(pattern);
-            if (match && match[1] && match[1].length > 2 && !skipWords.includes(match[1].split(' ')[0])) {
-              contextTeacherName = match[1].trim();
+          const skipWords = ['The', 'Here', 'This', 'However', 'Based', 'Overall', 'Dear', 'Please', 'Found', 'No', 'What', 'Today'];
+          for (const p of patterns) {
+            const m = lastAI.content.match(p);
+            if (m && m[1] && m[1].length > 2 && !skipWords.includes(m[1].split(' ')[0])) {
+              contextTeacherName = m[1].trim();
               break;
             }
           }
         }
-
         if (contextTeacherName) {
           const searchTerm = contextTeacherName.split(/[\s@]/)[0].toLowerCase();
-          const filtered = queryResults.filter(r => {
-            const name = (r.teacherName || '').toLowerCase();
-            const email = (r.teacherEmail || '').toLowerCase();
-            return name.includes(searchTerm) || email.includes(searchTerm);
-          });
+          const filtered = queryResults.filter(r =>
+            (r.teacherName || '').toLowerCase().includes(searchTerm) ||
+            (r.teacherEmail || '').toLowerCase().includes(searchTerm)
+          );
           if (filtered.length > 0) {
-            console.log(`🎯 Smart filter: ${queryResults.length} → ${filtered.length} for "${contextTeacherName}"`);
+            console.log(`🎯 Teacher filter: ${queryResults.length} → ${filtered.length}`);
             queryResults = filtered;
           }
         }
       }
     }
 
-    // Check if this is an attendance report (individual student)
-    const isIndividualReport = queryInfo.explanation &&
-      Array.isArray(queryResults) && queryResults.length > 0 && queryResults[0].studentName &&
-      (typeof queryInfo.explanation === 'string' && (queryInfo.explanation.toLowerCase().includes('attendance report') || queryInfo.explanation.toLowerCase().includes('detailed report')));
+    // ================================================================
+    // STEP 8: GENERATE RESPONSE
+    // ================================================================
 
     let naturalResponse;
 
     try {
-      // ================================================================
-      // DATA-DRIVEN RESPONSE: Use code-based formatters first (100% accurate)
-      // Only fall back to AI for simple conversational wrapping
-      // ================================================================
+      const isIndividualReport = queryInfo.explanation &&
+        Array.isArray(queryResults) && queryResults.length > 0 &&
+        queryResults[0].studentName &&
+        typeof queryInfo.explanation === 'string' &&
+        queryInfo.explanation.toLowerCase().includes('attendance report');
 
       if (isIndividualReport) {
-        // Use the code-based attendance report formatter - 100% accurate
-        naturalResponse = formatAttendanceReport(queryResults, userQuery);
-        console.log('✅ Used code-based attendance report formatter (no AI hallucination)');
-
-
+        naturalResponse = queryGenerator.formatAttendanceReport(queryResults);
+        console.log(`✅ Used attendance report formatter`);
       } else {
-        // Use queryGenerator's code-based formatters
         naturalResponse = await queryGenerator.generateNaturalResponse(userQuery, queryResults, queryInfo);
-        console.log('✅ Used queryGenerator formatters (data-driven response)');
+        console.log(`✅ Used natural response generator`);
       }
-
-    } catch (aiError) {
-      console.error('Response generation failed, using fallback:', aiError.message);
-
-      // Ultimate fallback
-      if (isIndividualReport) {
-        naturalResponse = formatAttendanceReport(queryResults);
-      } else {
-        const tableFormat = queryGenerator.formatAsTable(queryResults, queryInfo.collection, userQuery);
-        if (tableFormat) {
-          naturalResponse = tableFormat;
-        } else {
-          naturalResponse = queryGenerator.friendlyFormatResults(queryResults, userQuery, queryInfo.collection);
-        }
-      }
+    } catch (responseErr) {
+      console.error('Response generation failed:', responseErr.message);
+      const tableFormat = queryGenerator.formatAsTable(queryResults, queryInfo.collection, userQuery);
+      naturalResponse = tableFormat || queryGenerator.friendlyFormatResults(queryResults, userQuery, queryInfo.collection);
     }
 
-    // Calculate result count
-    let resultCount;
-    if (Array.isArray(queryResults)) {
-      resultCount = queryResults.length;
-    } else if (typeof queryResults === 'number') {
-      resultCount = queryResults;
-    } else {
-      resultCount = 1;
-    }
+    // ================================================================
+    // STEP 9: EXTRACT SUGGESTIONS AND SEND RESPONSE
+    // ================================================================
 
     let extractedSuggestions = [];
     if (naturalResponse) {
@@ -789,93 +753,71 @@ INSTRUCTIONS:
       }
     }
 
-    res.json({
+    const resultCount = Array.isArray(queryResults)
+      ? queryResults.length
+      : typeof queryResults === 'number'
+        ? queryResults
+        : 1;
+
+    return res.json({
       success: true,
-      answer: (naturalResponse || 'I processed your query but could not generate a response. Please try again.').trim(),
+      answer: (naturalResponse || 'Query processed but no response generated. Please try again.').trim(),
       suggestions: extractedSuggestions,
       queryInfo: {
         collection: queryInfo.collection,
         operation: queryInfo.operation,
-        explanation: queryInfo.explanation || 'Query executed successfully'
+        explanation: queryInfo.explanation || 'Query executed'
       },
-      resultCount: resultCount,
+      resultCount,
       rawData: Array.isArray(queryResults) && queryResults.length > 1 ? queryResults : null
     });
 
   } catch (error) {
-    console.error('Chat error:', error);
-    console.error('Chat error stack:', error.stack);
+    console.error('❌ Chat route error:', error.message);
+    console.error(error.stack);
 
-    const errMsg = (error && error.message) ? error.message : String(error);
-
-    let errorMessage = `## Error\n\nI encountered an error processing your request.\n\n`;
+    const errMsg = error.message || String(error);
+    let errorMessage = `## Something Went Wrong\n\nI encountered an unexpected error.\n\n`;
 
     if (errMsg.includes('overloaded') || errMsg.includes('503')) {
-      errorMessage += `## Service Overloaded\n\nThe AI service is experiencing high demand. Please try again in a moment.\n\n`;
-      errorMessage += `What to do:\n- Wait 10-15 seconds and try again\n- Try a simpler query\n- Contact support if the issue persists`;
-    } else if (errMsg.includes('Gemini') || errMsg.includes('API')) {
-      errorMessage += `## AI Service Issue\n\nThere was an issue with the AI service. Please try again.\n\n`;
-      errorMessage += `What to do:\n- Wait a few seconds and try again\n- Try a simpler query\n- Contact support if the issue persists`;
+      errorMessage += `The AI service is under high load. Please wait a moment and try again.`;
+    } else if (errMsg.includes('rate') || errMsg.includes('429')) {
+      errorMessage += `Rate limit reached. Please wait a few seconds and try again.`;
     } else if (errMsg.includes('MongoDB') || errMsg.includes('database')) {
-      errorMessage += `## Database Connection Issue\n\nThere was a problem connecting to the database. Please try again.\n\n`;
-      errorMessage += `What to do:\n- Refresh the page\n- Try again in a few seconds\n- Contact support if the issue persists`;
+      errorMessage += `Database connection issue. Please refresh and try again.`;
     } else if (errMsg.includes('JSON') || errMsg.includes('parse')) {
-      errorMessage += `## Query Understanding Error\n\nI had trouble understanding your query. Could you rephrase it?\n\n`;
-      errorMessage += `Examples:\n- List all students\n- Show BBA subjects\n- What is [student name]'s attendance?`;
+      errorMessage += `I had trouble understanding that query. Try rephrasing it.\n\n**Example:** "Show attendance for Amrutha" or "List BCA students"`;
     } else {
-      errorMessage += `Error Details:\n${errMsg}\n\n`;
-      errorMessage += `What to try:\n- Rephrase your question\n- Try a simpler query\n- Check your spelling\n- Try again later`;
+      errorMessage += `**Error:** ${errMsg}\n\n**Try:** Rephrasing your question or using a simpler query.`;
     }
 
-    res.status(500).json({
-      success: false,
-      error: errorMessage
-    });
+    return res.status(500).json({ success: false, error: errorMessage });
   }
 });
 
-
 // ============================================================================
-// HEALTH CHECK ENDPOINT
+// HEALTH CHECK
 // ============================================================================
 
 router.get('/health', (req, res) => {
   res.json({
     success: true,
     status: 'Online',
-    message: 'Academic Assistant is ready!',
+    message: 'SAAME Academic Assistant is ready',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    serverTime: new Date().toLocaleString('en-US', {
-      timeZone: 'UTC',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    }),
+    uptime: `${Math.floor(process.uptime())}s`,
+    model: 'llama-3.3-70b-versatile (Groq)',
     features: [
-      'Student Search by Name/ID/Stream',
-      'Subject Information & Statistics',
-      'Attendance Records & History',
-      'Detailed Attendance Reports',
-      'Teacher Information & Subjects',
-      'Statistical Queries & Analytics',
-      'Natural Language Processing',
-      'Smart Error Handling'
-    ],
-    exampleQueries: [
-      'List all students',
-      'Show BBA semester 5 subjects',
-      'What is [student name]\'s attendance?',
-      'Show attendance on 2025-10-22',
-      'How many students in BCA?',
-      'Who teaches Business Data Analytics?'
+      'Intent Classification (DB vs General)',
+      'College Knowledge Base (Policies, NAAC, Rules)',
+      'Student Search & Attendance Reports',
+      'Teacher Info & Mentorship Queries',
+      'Analytics (Top, Bottom, Defaulters, Comparisons)',
+      'Pronoun & Follow-up Resolution',
+      'Smart Retry on Zero Results',
+      'Fuzzy Name Matching'
     ]
   });
 });
-
 
 module.exports = router;

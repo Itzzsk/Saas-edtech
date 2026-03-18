@@ -1,21 +1,17 @@
 {
-  "id": "/",
-  "name": "Non Teaching Portal",
-  "short_name": "NonTeaching",
-  "start_url": "/",
+  "name": "Admin Portal",
+  "short_name": "Admin",
+  "description": "Smart Attendance Non-Teaching Administrative Portal",
+  "start_url": "index.html",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#1a1a1a",
+  "background_color": "#0C0C0E",
+  "theme_color": "#A78BFA",
   "icons": [
     {
-      "src": "/icons/final.png",
-      "sizes": "192x192",
-      "type": "image/png"
-    },
-    {
-      "src": "/icons/final.png",
+      "src": "logo2.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
     }
   ]
 }

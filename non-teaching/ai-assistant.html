@@ -18,6 +18,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.21/jspdf.plugin.autotable.min.js"></script>
+  <link rel="stylesheet" href="css/profile.css">
   <style>
     :root {
       --bg-root: #0C0C0E;
@@ -347,6 +348,37 @@
       line-height: 1.6;
     }
 
+    /* Welcome quick chips */
+    .welcome-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 24px;
+      max-width: 560px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .welcome-chip {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 9px 16px;
+      border-radius: 20px;
+      font-size: 12.5px;
+      cursor: pointer;
+      transition: all .2s;
+      font-family: inherit;
+    }
+
+    .welcome-chip:hover {
+      background: var(--bg-elevated);
+      border-color: var(--border-hover);
+      color: var(--text-primary);
+      transform: translateY(-1px);
+    }
+
     .chat-container.initial-state {
       justify-content: center;
       padding-bottom: 15vh;
@@ -421,10 +453,11 @@
       background: transparent;
       border: none;
       color: var(--text-secondary);
-      padding: 4px 0;
+      padding: 4px 0 10px 0;
       border-radius: 0;
       font-size: 14px;
       line-height: 1.75;
+      max-width: 100%;
     }
 
     .ai-avatar-msg {
@@ -462,7 +495,7 @@
     }
 
     .ai-bubble p {
-      margin-bottom: 10px;
+      margin: 0 0 10px 0;
       color: var(--text-secondary);
     }
 
@@ -631,6 +664,7 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      font-family: inherit;
     }
 
     .suggestion-chip:before {
@@ -643,7 +677,6 @@
       border-color: rgba(255, 255, 255, 0.15);
       transform: translateY(-1px);
     }
-
 
     .table-dropdown {
       position: absolute;
@@ -741,6 +774,7 @@
       justify-content: center;
       cursor: pointer;
       transition: all .2s;
+      flex-shrink: 0;
     }
 
     .send-btn:hover {
@@ -826,6 +860,24 @@
 
     .scroll-to-bottom .material-symbols-rounded {
       font-size: 20px;
+    }
+
+    /* ══════════ RESULT COUNT BADGE ══════════ */
+    .result-count-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .result-count-badge .material-symbols-rounded {
+      font-size: 13px;
     }
 
     /* ══════════ HISTORY DRAWER ══════════ */
@@ -919,7 +971,6 @@
 
     .history-item.active {
       background: var(--bg-elevated);
-      border-color: var(--purple);
       border-color: rgba(167, 139, 250, 0.3);
     }
 
@@ -964,6 +1015,16 @@
       opacity: 1;
     }
 
+    /* ══════════ ERROR STATE ══════════ */
+    .error-bubble {
+      background: var(--red-dim);
+      border: 1px solid rgba(248, 113, 113, 0.2);
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--red);
+    }
+
     @media(max-width:768px) {
       .sidebar {
         display: none;
@@ -997,8 +1058,11 @@
           class="material-symbols-rounded">chat</span>WhatsApp</a>
     </div>
     <div class="sb-divider"></div>
-    <div class="sb-bottom"><button class="sb-logout" id="logoutBtn"><span
-          class="material-symbols-rounded">logout</span>Log Out</button></div>
+    <div class="sb-bottom">
+      <button class="sb-logout" id="logoutBtn">
+        <span class="material-symbols-rounded">logout</span>Log Out
+      </button>
+    </div>
   </aside>
 
   <div class="main">
@@ -1007,10 +1071,12 @@
         <h1><span class="material-symbols-rounded">auto_awesome</span> AI Assistant</h1>
       </div>
       <div class="header-actions">
-        <button class="header-btn" onclick="toggleHistory()" title="Chat History"><span class="material-symbols-rounded"
-            style="font-size:18px;">history</span></button>
-        <button class="header-btn header-btn-text" onclick="newChat()"><span class="material-symbols-rounded"
-            style="font-size:16px;">edit_square</span>New Chat</button>
+        <button class="header-btn" onclick="toggleHistory()" title="Chat History">
+          <span class="material-symbols-rounded" style="font-size:18px;">history</span>
+        </button>
+        <button class="header-btn header-btn-text" onclick="newChat()">
+          <span class="material-symbols-rounded" style="font-size:16px;">edit_square</span>New Chat
+        </button>
         <div class="avatar-pill">
           <div class="avatar-dot" id="headerAvatar">AD</div>
           <div class="avatar-info">
@@ -1025,8 +1091,10 @@
     <div class="history-drawer-overlay" id="historyOverlay" onclick="toggleHistory()"></div>
     <div class="history-drawer" id="historyDrawer">
       <div class="history-header">
-        <h3>Chat History</h3><button class="history-close" onclick="toggleHistory()"><span
-            class="material-symbols-rounded">close</span></button>
+        <h3>Chat History</h3>
+        <button class="history-close" onclick="toggleHistory()">
+          <span class="material-symbols-rounded">close</span>
+        </button>
       </div>
       <div class="history-list" id="historySidebarList"></div>
     </div>
@@ -1035,7 +1103,16 @@
       <div class="messages-area" id="messagesArea">
         <div class="welcome-state" id="welcomeState">
           <h1 class="welcome-title" id="welcomeTitle">How can I help you?</h1>
-          <p class="welcome-subtitle">Ask anything about attendance reports, student performance, or promotions.</p>
+          <p class="welcome-subtitle">Ask anything about attendance reports, student performance, teachers, or academic
+            policies.</p>
+          <div class="welcome-chips">
+            <button class="welcome-chip" onclick="useWelcomeChip(this)">Show defaulters list</button>
+            <button class="welcome-chip" onclick="useWelcomeChip(this)">Today's attendance</button>
+            <button class="welcome-chip" onclick="useWelcomeChip(this)">Top 10 students</button>
+            <button class="welcome-chip" onclick="useWelcomeChip(this)">List all teachers</button>
+            <button class="welcome-chip" onclick="useWelcomeChip(this)">What is the attendance rule?</button>
+            <button class="welcome-chip" onclick="useWelcomeChip(this)">Students with 100% attendance</button>
+          </div>
         </div>
       </div>
 
@@ -1045,12 +1122,17 @@
 
       <div class="input-area">
         <div class="input-box-wrapper">
-          <textarea class="input-field" id="messageInput" placeholder="Message Smart AI..." rows="1"></textarea>
-          <button class="send-btn" id="sendBtn"><span class="material-symbols-rounded">arrow_upward</span></button>
+          <textarea class="input-field" id="messageInput" placeholder="Message SAAME AI..." rows="1"></textarea>
+          <button class="send-btn" id="sendBtn">
+            <span class="material-symbols-rounded">arrow_upward</span>
+          </button>
         </div>
       </div>
     </div>
   </div>
+
+  <!-- Profile Handler -->
+  <script src="js/profile-handler.js"></script>
 
   <!-- Firebase Auth -->
   <script type="module">
@@ -1063,37 +1145,96 @@
     window.firebaseAuth = auth;
 
     document.getElementById("logoutBtn").onclick = () => {
-      signOut(auth).then(() => { localStorage.clear(); sessionStorage.clear(); window.location.replace("index.html"); });
+      signOut(auth).then(() => {
+        localStorage.clear();
+        sessionStorage.clear();
+        window.location.replace("index.html");
+      });
     };
 
-    onAuthStateChanged(auth, (user) => {
-      if (user && user.email) {
-        let name = user.displayName;
-        if (!name) {
-          name = user.email.split('@')[0].replace(/[0-9.]/g, ' ').trim();
-          name = name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    async function fetchTeacherProfile(email) {
+      try {
+        const r = await fetch(`${window.APP_CONFIG.API_BASE_URL}/teacher/profile/email/${encodeURIComponent(email)}`);
+        if (r.ok) {
+          const d = await r.json();
+          return d.success ? d.teacher : null;
         }
-        document.getElementById('headerUserName').textContent = name;
-        if (document.getElementById('headerUserEmail')) document.getElementById('headerUserEmail').textContent = user.email;
-        const parts = name.trim().split(' ').filter(Boolean);
-        const initials = parts.length > 1 ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase() : name.substring(0, 2).toUpperCase();
-        document.getElementById('headerAvatar').textContent = initials;
-        document.getElementById('welcomeTitle').textContent = `How can I help you, ${name.split(' ')[0]}?`;
-      } else { window.location.href = 'index.html'; }
+      } catch (e) {
+        console.error('Profile fetch error:', e);
+      }
+      return null;
+    }
+
+    function updateUserInfo(name, email, profileImageUrl) {
+      document.getElementById('headerUserName').textContent = name;
+      if (document.getElementById('headerUserEmail')) {
+        document.getElementById('headerUserEmail').textContent = email;
+      }
+      
+      const avatarEl = document.getElementById('headerAvatar');
+      if (avatarEl) {
+        if (profileImageUrl) {
+          avatarEl.innerHTML = `<img src="${profileImageUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+        } else {
+          const parts = name.trim().split(' ').filter(Boolean);
+          const initials = parts.length > 1
+            ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+            : name.substring(0, 2).toUpperCase();
+          avatarEl.textContent = initials;
+        }
+      }
+      
+      const welcomeTitle = document.getElementById('welcomeTitle');
+      if (welcomeTitle) {
+        welcomeTitle.textContent = `How can I help you, ${name.split(' ')[0]}?`;
+      }
+    }
+
+    onAuthStateChanged(auth, async (user) => {
+      if (user && user.email) {
+        let name = user.displayName || user.email.split('@')[0].replace(/[0-9.]/g, ' ').trim();
+        name = name.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        
+        const profile = await fetchTeacherProfile(user.email);
+        if (profile && profile.name) name = profile.name;
+
+        updateUserInfo(name, user.email, profile?.profileImageUrl);
+        
+        // Initialize Profile Image Upload Logic
+        if (typeof initProfileUpload === 'function') {
+          initProfileUpload(user.email);
+        }
+      } else {
+        window.location.href = 'index.html';
+      }
     });
   </script>
 
   <script>
+    // ================================================================
+    // MARKED CONFIG
+    // ================================================================
+    if (typeof marked !== 'undefined') {
+      marked.setOptions({
+        breaks: true,
+        gfm: true
+      });
+    }
+
+    // ================================================================
+    // ELEMENTS
+    // ================================================================
     const chatContainer = document.getElementById('chatContainer');
     const messagesArea = document.getElementById('messagesArea');
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
 
-    // ====================================
+    // ================================================================
     // CONVERSATION MEMORY & HISTORY
-    // ====================================
+    // ================================================================
     let conversationHistory = [];
     let currentSessionId = Date.now().toString();
+    let isLoading = false;
     const SESSION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
     function getHistory() {
@@ -1101,9 +1242,11 @@
         const stored = localStorage.getItem('ai_chat_sessions_admin');
         let sessions = stored ? JSON.parse(stored) : [];
         const now = Date.now();
-        const validSessions = sessions.filter(s => (now - s.lastUpdated) < SESSION_EXPIRY_MS);
-        if (sessions.length !== validSessions.length) localStorage.setItem('ai_chat_sessions_admin', JSON.stringify(validSessions));
-        return validSessions;
+        const valid = sessions.filter(s => (now - s.lastUpdated) < SESSION_EXPIRY_MS);
+        if (sessions.length !== valid.length) {
+          localStorage.setItem('ai_chat_sessions_admin', JSON.stringify(valid));
+        }
+        return valid;
       } catch (e) { return []; }
     }
 
@@ -1112,8 +1255,16 @@
       const title = conversationHistory[0].content;
       const sessions = getHistory();
       const existingIdx = sessions.findIndex(s => s.id === currentSessionId);
-      const sessionData = { id: currentSessionId, title, lastUpdated: Date.now(), history: conversationHistory, html: messagesArea.innerHTML, hasInitialState: chatContainer.classList.contains('initial-state') };
-      if (existingIdx >= 0) sessions[existingIdx] = sessionData; else sessions.unshift(sessionData);
+      const sessionData = {
+        id: currentSessionId,
+        title,
+        lastUpdated: Date.now(),
+        history: conversationHistory,
+        html: messagesArea.innerHTML,
+        hasInitialState: chatContainer.classList.contains('initial-state')
+      };
+      if (existingIdx >= 0) sessions[existingIdx] = sessionData;
+      else sessions.unshift(sessionData);
       localStorage.setItem('ai_chat_sessions_admin', JSON.stringify(sessions));
       renderHistorySidebar();
     }
@@ -1122,13 +1273,24 @@
       const sessions = getHistory();
       const listEl = document.getElementById('historySidebarList');
       if (!listEl) return;
-      if (sessions.length === 0) { listEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px;">No recent history.</div>'; return; }
+      if (sessions.length === 0) {
+        listEl.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px;">No recent history.</div>';
+        return;
+      }
       listEl.innerHTML = sessions.map(s => {
         const mins = Math.floor((Date.now() - s.lastUpdated) / 60000);
         let timeStr = mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ago`;
         if (mins === 0) timeStr = 'Just now';
         if (mins > 1440) timeStr = '1d+ ago';
-        return `<div class="history-item ${s.id === currentSessionId ? 'active' : ''}" onclick="loadSession('${s.id}')"><div class="history-item-content"><div class="history-title">${s.title.replace(/</g, '&lt;')}</div><div class="history-time">${timeStr}</div></div><button class="history-delete" onclick="deleteSession(event, '${s.id}')" aria-label="Delete"><span class="material-symbols-rounded" style="font-size:15px;">delete</span></button></div>`;
+        return `<div class="history-item ${s.id === currentSessionId ? 'active' : ''}" onclick="loadSession('${s.id}')">
+          <div class="history-item-content">
+            <div class="history-title">${s.title.replace(/</g, '&lt;').substring(0, 60)}</div>
+            <div class="history-time">${timeStr}</div>
+          </div>
+          <button class="history-delete" onclick="deleteSession(event, '${s.id}')" aria-label="Delete">
+            <span class="material-symbols-rounded" style="font-size:15px;">delete</span>
+          </button>
+        </div>`;
       }).join('');
     }
 
@@ -1138,7 +1300,8 @@
       currentSessionId = session.id;
       conversationHistory = session.history || [];
       messagesArea.innerHTML = session.html || '';
-      if (session.hasInitialState) chatContainer.classList.add('initial-state'); else chatContainer.classList.remove('initial-state');
+      if (session.hasInitialState) chatContainer.classList.add('initial-state');
+      else chatContainer.classList.remove('initial-state');
       renderHistorySidebar();
       toggleHistory();
       setTimeout(scrollToBottom, 100);
@@ -1148,31 +1311,61 @@
       e.stopPropagation();
       let sessions = getHistory().filter(s => s.id !== id);
       localStorage.setItem('ai_chat_sessions_admin', JSON.stringify(sessions));
-      if (id === currentSessionId) newChat(); else renderHistorySidebar();
+      if (id === currentSessionId) newChat();
+      else renderHistorySidebar();
     }
 
     window.toggleHistory = function () {
       const overlay = document.getElementById('historyOverlay');
       const drawer = document.getElementById('historyDrawer');
-      if (overlay && drawer) { overlay.classList.toggle('show'); drawer.classList.toggle('show'); }
+      if (overlay && drawer) {
+        overlay.classList.toggle('show');
+        drawer.classList.toggle('show');
+        if (drawer.classList.contains('show')) renderHistorySidebar();
+      }
     };
 
     window.addEventListener('DOMContentLoaded', () => { renderHistorySidebar(); });
 
-    messageInput.addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 150) + 'px'; });
+    // ================================================================
+    // WELCOME CHIPS
+    // ================================================================
+    window.useWelcomeChip = function (btn) {
+      messageInput.value = btn.textContent.trim();
+      messageInput.focus();
+      sendMessage();
+    };
 
+    // ================================================================
+    // INPUT AUTO-RESIZE
+    // ================================================================
+    messageInput.addEventListener('input', function () {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+    });
+
+    // ================================================================
+    // SCROLL
+    // ================================================================
     function scrollToBottom() {
       const doScroll = () => { messagesArea.scrollTop = messagesArea.scrollHeight + 1000; };
-      doScroll(); setTimeout(doScroll, 50); setTimeout(doScroll, 150); setTimeout(doScroll, 300);
+      doScroll();
+      setTimeout(doScroll, 50);
+      setTimeout(doScroll, 150);
+      setTimeout(doScroll, 300);
     }
 
     messagesArea.addEventListener('scroll', () => {
       const btn = document.getElementById('scrollToBottomBtn');
       if (!btn) return;
       const dist = messagesArea.scrollHeight - messagesArea.scrollTop - messagesArea.clientHeight;
-      if (dist > 200) btn.classList.add('visible'); else btn.classList.remove('visible');
+      if (dist > 200) btn.classList.add('visible');
+      else btn.classList.remove('visible');
     });
 
+    // ================================================================
+    // NEW CHAT
+    // ================================================================
     function newChat() {
       conversationHistory = [];
       currentSessionId = Date.now().toString();
@@ -1184,23 +1377,55 @@
     }
     window.newChat = newChat;
 
+    // ================================================================
+    // ADD MESSAGES
+    // ================================================================
     function addUserMsg(text) {
       chatContainer.classList.remove('initial-state');
       const div = document.createElement('div');
       div.className = 'message-row user-row';
-      div.innerHTML = `<div class="bubble user-bubble">${text.replace(/</g, "&lt;")}</div>`;
+      div.innerHTML = `<div class="bubble user-bubble">${text.replace(/</g, '&lt;').replace(/\n/g, '<br>')}</div>`;
       messagesArea.appendChild(div);
       scrollToBottom();
     }
 
-    function addAIMsg(html, suggestions = []) {
+    function addAIMsg(html, suggestions = [], resultCount = null) {
       const row = document.createElement('div');
       row.className = 'message-row';
+
+      // Wrap tables with export controls
       let processedHtml = html;
       if (html.includes('<table')) {
-        processedHtml = `<div class="table-container-wrapper"><div class="table-content-area">${html}</div><div class="table-footer"><div class="table-actions-trigger" onclick="toggleTableMenu(this)"><span class="material-symbols-rounded">more_vert</span></div><div class="table-dropdown"><div class="table-dropdown-item" onclick="exportTableToExcel(this)"><span class="material-symbols-rounded">description</span> Excel</div><div class="table-dropdown-item" onclick="exportTableToPDF(this)"><span class="material-symbols-rounded">picture_as_pdf</span> PDF</div></div></div></div>`;
+        processedHtml = processedHtml.replace(
+          /(<table[\s\S]*?<\/table>)/g,
+          `<div class="table-container-wrapper">
+            <div class="table-content-area">$1</div>
+            <div class="table-footer">
+              <div class="table-actions-trigger" onclick="toggleTableMenu(this)">
+                <span class="material-symbols-rounded">more_vert</span>
+              </div>
+              <div class="table-dropdown">
+                <div class="table-dropdown-item" onclick="exportTableToExcel(this)">
+                  <span class="material-symbols-rounded">description</span> Excel
+                </div>
+                <div class="table-dropdown-item" onclick="exportTableToPDF(this)">
+                  <span class="material-symbols-rounded">picture_as_pdf</span> PDF
+                </div>
+              </div>
+            </div>
+          </div>`
+        );
       }
 
+      // Result count badge
+      let countBadge = '';
+      if (resultCount !== null && resultCount > 0) {
+        countBadge = `<div style="margin-bottom: 8px"><div class="result-count-badge">
+          <span class="material-symbols-rounded">database</span>${resultCount} record${resultCount !== 1 ? 's' : ''} found
+        </div></div>`;
+      }
+
+      // Suggestion chips
       let suggestionsHtml = '';
       if (suggestions && suggestions.length > 0) {
         suggestionsHtml = `<div class="suggestions-container">` +
@@ -1208,17 +1433,41 @@
           `</div>`;
       }
 
-      row.innerHTML = `<div class="ai-avatar-msg"><span class="material-symbols-rounded">auto_awesome</span></div><div class="bubble ai-bubble">${processedHtml}${suggestionsHtml}</div>`;
+      row.innerHTML = `
+        <div class="ai-avatar-msg"><span class="material-symbols-rounded">auto_awesome</span></div>
+        <div class="bubble ai-bubble" style="display:flex; flex-direction:column; justify-content:center;">
+          <div>${countBadge}${processedHtml}</div>
+          ${suggestionsHtml}
+        </div>
+      `;
       messagesArea.appendChild(row);
       scrollToBottom();
     }
 
+    function addErrorMsg(text) {
+      const row = document.createElement('div');
+      row.className = 'message-row';
+      row.innerHTML = `
+        <div class="ai-avatar-msg" style="background:var(--red)"><span class="material-symbols-rounded">error</span></div>
+        <div class="bubble ai-bubble" style="display:flex; flex-direction:column; justify-content:center;"><div class="error-bubble">${text}</div></div>
+      `;
+      messagesArea.appendChild(row);
+      scrollToBottom();
+    }
+
+    // ================================================================
+    // SUGGESTION CHIPS
+    // ================================================================
     window.executeSuggestion = function (btn) {
+      if (isLoading) return;
       const text = btn.innerText.replace('💡 ', '').trim();
       messageInput.value = text;
       sendMessage();
     };
 
+    // ================================================================
+    // TABLE EXPORTS
+    // ================================================================
     function toggleTableMenu(el) {
       const dropdown = el.nextElementSibling;
       const isShown = dropdown.classList.contains('show');
@@ -1227,51 +1476,161 @@
     }
 
     window.addEventListener('click', (e) => {
-      if (!e.target.closest('.table-container-wrapper')) document.querySelectorAll('.table-dropdown').forEach(d => d.classList.remove('show'));
+      if (!e.target.closest('.table-container-wrapper')) {
+        document.querySelectorAll('.table-dropdown').forEach(d => d.classList.remove('show'));
+      }
     });
 
     function exportTableToExcel(el) {
-      try { const table = el.closest('.table-container-wrapper').querySelector('table'); const wb = XLSX.utils.table_to_book(table, { sheet: "AI Report" }); XLSX.writeFile(wb, "Smart_Attendance_AI_Report.xlsx"); } catch (e) { alert("Excel export failed"); }
+      try {
+        const table = el.closest('.table-container-wrapper').querySelector('table');
+        const wb = XLSX.utils.table_to_book(table, { sheet: "AI Report" });
+        XLSX.writeFile(wb, `SAAME_Report_${Date.now()}.xlsx`);
+      } catch (e) { alert("Excel export failed: " + e.message); }
       el.parentElement.classList.remove('show');
     }
 
     function exportTableToPDF(el) {
-      try { const { jsPDF } = window.jspdf; const doc = new jsPDF(); const table = el.closest('.table-container-wrapper').querySelector('table'); doc.autoTable({ html: table, theme: 'grid', headStyles: { fillColor: [99, 102, 241] }, styles: { fontSize: 8 } }); doc.save("Smart_Attendance_AI_Report.pdf"); } catch (e) { alert("PDF export failed"); }
+      try {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        const table = el.closest('.table-container-wrapper').querySelector('table');
+        doc.autoTable({
+          html: table, theme: 'grid',
+          headStyles: { fillColor: [99, 102, 241] },
+          styles: { fontSize: 8 }
+        });
+        doc.save(`SAAME_Report_${Date.now()}.pdf`);
+      } catch (e) { alert("PDF export failed: " + e.message); }
       el.parentElement.classList.remove('show');
     }
 
+    // ================================================================
+    // TYPING INDICATOR
+    // ================================================================
     function showTyping() {
-      const div = document.createElement('div'); div.id = 'typing'; div.className = 'message-row';
-      div.innerHTML = `<div class="ai-avatar-msg"><span class="material-symbols-rounded">auto_awesome</span></div><div class="bubble ai-bubble"><div class="typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
-      messagesArea.appendChild(div); scrollToBottom();
+      const div = document.createElement('div');
+      div.id = 'typing-indicator';
+      div.className = 'message-row';
+      div.innerHTML = `
+        <div class="ai-avatar-msg"><span class="material-symbols-rounded">auto_awesome</span></div>
+        <div class="bubble ai-bubble">
+          <div class="typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+        </div>
+      `;
+      messagesArea.appendChild(div);
+      scrollToBottom();
     }
 
-    async function sendMessage() {
-      const text = messageInput.value.trim();
-      if (!text) return;
-      addUserMsg(text);
-      messageInput.value = ''; messageInput.style.height = 'auto';
-      conversationHistory.push({ role: 'user', content: text });
-      showTyping();
-      try {
-        const res = await fetch(`${window.APP_CONFIG.API_BASE_URL}/chatbot/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: text, history: conversationHistory.slice(0, -1) }) });
-        const data = await res.json();
-        document.getElementById('typing').remove();
-        if (data.success) {
-          const content = typeof marked !== 'undefined' ? marked.parse(data.answer) : data.answer;
-          addAIMsg(content, data.suggestions);
-          conversationHistory.push({ role: 'assistant', content: data.answer, suggestions: data.suggestions });
-          if (conversationHistory.length > 40) conversationHistory = conversationHistory.slice(-40);
-          saveSession();
-        } else { addAIMsg(`Error: ${data.error || 'Server returned an error.'}`); saveSession(); }
-      } catch (e) {
-        if (document.getElementById('typing')) document.getElementById('typing').remove();
-        addAIMsg(`Connection failed: ${e.message}. Check if backend is running.`);
+    function removeTyping() {
+      const el = document.getElementById('typing-indicator');
+      if (el) el.remove();
+    }
+
+    // ================================================================
+    // SET LOADING STATE
+    // ================================================================
+    function setLoading(loading) {
+      isLoading = loading;
+      sendBtn.disabled = loading;
+      messageInput.disabled = loading;
+      if (loading) {
+        sendBtn.innerHTML = '<span class="material-symbols-rounded" style="font-size:16px;animation:bounce 1s infinite">more_horiz</span>';
+      } else {
+        sendBtn.innerHTML = '<span class="material-symbols-rounded">arrow_upward</span>';
       }
     }
 
+    // ================================================================
+    // SEND MESSAGE
+    // ================================================================
+    async function sendMessage() {
+      const text = messageInput.value.trim();
+      if (!text || isLoading) return;
+
+      addUserMsg(text);
+      messageInput.value = '';
+      messageInput.style.height = 'auto';
+      conversationHistory.push({ role: 'user', content: text });
+
+      setLoading(true);
+      showTyping();
+
+      try {
+        const res = await fetch(`${window.APP_CONFIG.API_BASE_URL}/chatbot/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: text,
+            history: conversationHistory.slice(0, -1)
+          })
+        });
+
+        removeTyping();
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          addErrorMsg(errData.error || `Server error ${res.status}. Please try again.`);
+          setLoading(false);
+          return;
+        }
+
+        const data = await res.json();
+
+        if (data.success) {
+          const rawAnswer = data.answer || '';
+          const content = typeof marked !== 'undefined' ? marked.parse(rawAnswer) : rawAnswer;
+          const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+          const resultCount = data.resultCount || null;
+
+          addAIMsg(content, suggestions, resultCount > 1 ? resultCount : null);
+
+          conversationHistory.push({
+            role: 'assistant',
+            content: rawAnswer,
+            suggestions: suggestions
+          });
+
+          // Keep history bounded to last 40 messages
+          if (conversationHistory.length > 40) {
+            conversationHistory = conversationHistory.slice(-40);
+          }
+
+          saveSession();
+        } else {
+          const errContent = typeof marked !== 'undefined'
+            ? marked.parse(data.error || 'An error occurred.')
+            : (data.error || 'An error occurred.');
+          addErrorMsg(errContent);
+          saveSession();
+        }
+
+      } catch (e) {
+        removeTyping();
+        addErrorMsg(`Connection failed: <strong>${e.message}</strong><br>Make sure the backend server is running.`);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    // ================================================================
+    // EVENT LISTENERS
+    // ================================================================
     sendBtn.onclick = sendMessage;
-    messageInput.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
+
+    messageInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    };
+
+    // Paste handling — strip HTML, keep plain text
+    messageInput.addEventListener('paste', (e) => {
+      e.preventDefault();
+      const text = e.clipboardData.getData('text/plain');
+      document.execCommand('insertText', false, text);
+    });
   </script>
 </body>
 

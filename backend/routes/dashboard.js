@@ -80,8 +80,18 @@ router.get('/stats', async (req, res) => {
       lastWeekAttendance,
       allStreams
     ] = await Promise.all([
-      req.db.collection('students').distinct('studentID').then(arr => arr.filter(id => id != null).length),
-      req.db.collection('students').distinct('studentID', { isActive: true }).then(arr => arr.filter(id => id != null).length),
+      req.db.collection('students').aggregate([
+        { $match: { studentID: { $exists: true, $ne: "", $ne: null } } },
+        { $group: { _id: { $toLower: { $trim: { input: "$studentID" } } } } },
+        { $count: "total" }
+      ]).toArray().then(arr => arr[0]?.total || 0),
+      req.db.collection('students').aggregate([
+        { $match: { studentID: { $exists: true, $ne: "", $ne: null } } },
+        { $sort: { createdAt: -1 } },
+        { $group: { _id: { $toLower: { $trim: { input: "$studentID" } } }, isActive: { $first: "$isActive" } } },
+        { $match: { isActive: true } },
+        { $count: "total" }
+      ]).toArray().then(arr => arr[0]?.total || 0),
       req.db.collection('students').distinct('stream', { isActive: true }).then(arr => arr.length),
       req.db.collection('subjects').countDocuments({ isActive: true }),
       req.db.collection('attendance').find({ date: today }).toArray(),
@@ -90,73 +100,52 @@ router.get('/stats', async (req, res) => {
       req.db.collection('students').distinct('stream', { isActive: true })
     ]);
 
-    // ========== TODAY'S ATTENDANCE (Count globally unique students) ==========
-    let todayPresent = 0, todayTotal = activeStudents;
-    const uniqueStudentsToday = new Set();
+    // ========== TODAY'S ATTENDANCE (Sum of marked classes today) ==========
+    let todayPresent = 0, todayAbsent = 0;
 
     todayAttendance.forEach(r => {
-      if (r.studentsPresent && Array.isArray(r.studentsPresent)) {
-        r.studentsPresent.forEach(studentId => {
-          uniqueStudentsToday.add(String(studentId));
-        });
-      }
+      const pCount = r.presentCount !== undefined ? r.presentCount : (r.studentsPresent ? r.studentsPresent.length : 0);
+      const absCount = r.absentCount !== undefined ? r.absentCount : Math.max(0, (r.totalStudents || 0) - pCount);
+      todayPresent += pCount;
+      todayAbsent += absCount;
     });
 
-    todayPresent = uniqueStudentsToday.size;
-    const todayAbsent = Math.max(0, todayTotal - todayPresent);
-    const todayRate = todayTotal > 0 ? Math.min(100, Math.round((todayPresent / todayTotal) * 100)) : 0;
+    const todayTotal = todayPresent + todayAbsent;
+    const todayRate = todayTotal > 0 ? Math.round((todayPresent / todayTotal) * 100) : 0;
 
-    // ========== WEEKLY COMPARISON (unique students per day, then average) ==========
-    const thisWeekDays = new Map();
+    // ========== WEEKLY COMPARISON (Sum of classes marked in period) ==========
+    let thisWeekPresent = 0, thisWeekTotal = 0;
     thisWeekAttendance.forEach(r => {
-      const dateStr = r.date || (r.createdAt ? new Date(r.createdAt).toISOString().split('T')[0] : null);
-      if (!dateStr) return;
-      if (!thisWeekDays.has(dateStr)) thisWeekDays.set(dateStr, new Set());
-      if (r.studentsPresent && Array.isArray(r.studentsPresent)) {
-        r.studentsPresent.forEach(sid => thisWeekDays.get(dateStr).add(String(sid)));
-      }
+      const pCount = r.presentCount !== undefined ? r.presentCount : (r.studentsPresent ? r.studentsPresent.length : 0);
+      const absCount = r.absentCount !== undefined ? r.absentCount : Math.max(0, (r.totalStudents || 0) - pCount);
+      thisWeekPresent += pCount;
+      thisWeekTotal += (pCount + absCount);
     });
-    let thisWeekRateSum = 0;
-    thisWeekDays.forEach(daySet => {
-      thisWeekRateSum += activeStudents > 0 ? Math.min(100, (daySet.size / activeStudents) * 100) : 0;
-    });
-    const thisWeekRate = thisWeekDays.size > 0 ? Math.round(thisWeekRateSum / thisWeekDays.size) : 0;
+    const thisWeekRate = thisWeekTotal > 0 ? Math.round((thisWeekPresent / thisWeekTotal) * 100) : 0;
 
-    const lastWeekDays = new Map();
+    let lastWeekPresent = 0, lastWeekTotal = 0;
     lastWeekAttendance.forEach(r => {
-      const dateStr = r.date || (r.createdAt ? new Date(r.createdAt).toISOString().split('T')[0] : null);
-      if (!dateStr) return;
-      if (!lastWeekDays.has(dateStr)) lastWeekDays.set(dateStr, new Set());
-      if (r.studentsPresent && Array.isArray(r.studentsPresent)) {
-        r.studentsPresent.forEach(sid => lastWeekDays.get(dateStr).add(String(sid)));
-      }
+      const pCount = r.presentCount !== undefined ? r.presentCount : (r.studentsPresent ? r.studentsPresent.length : 0);
+      const absCount = r.absentCount !== undefined ? r.absentCount : Math.max(0, (r.totalStudents || 0) - pCount);
+      lastWeekPresent += pCount;
+      lastWeekTotal += (pCount + absCount);
     });
-    let lastWeekRateSum = 0;
-    lastWeekDays.forEach(daySet => {
-      lastWeekRateSum += activeStudents > 0 ? Math.min(100, (daySet.size / activeStudents) * 100) : 0;
-    });
-    const lastWeekRate = lastWeekDays.size > 0 ? Math.round(lastWeekRateSum / lastWeekDays.size) : 0;
+    const lastWeekRate = lastWeekTotal > 0 ? Math.round((lastWeekPresent / lastWeekTotal) * 100) : 0;
     const weeklyTrend = lastWeekRate > 0 ? thisWeekRate - lastWeekRate : 0;
 
-    // ========== MONTHLY RATE (unique students per day, then average) ==========
+    // ========== MONTHLY RATE ==========
     const monthStartStr = getDateStr(startOfMonth);
     const monthlyAttendance = await req.db.collection('attendance').find({
       date: { $gte: monthStartStr }
     }).toArray();
-    const monthDays = new Map();
+    let monthPresent = 0, monthTotal = 0;
     monthlyAttendance.forEach(r => {
-      const dateStr = r.date || (r.createdAt ? new Date(r.createdAt).toISOString().split('T')[0] : null);
-      if (!dateStr) return;
-      if (!monthDays.has(dateStr)) monthDays.set(dateStr, new Set());
-      if (r.studentsPresent && Array.isArray(r.studentsPresent)) {
-        r.studentsPresent.forEach(sid => monthDays.get(dateStr).add(String(sid)));
-      }
+      const pCount = r.presentCount !== undefined ? r.presentCount : (r.studentsPresent ? r.studentsPresent.length : 0);
+      const absCount = r.absentCount !== undefined ? r.absentCount : Math.max(0, (r.totalStudents || 0) - pCount);
+      monthPresent += pCount;
+      monthTotal += (pCount + absCount);
     });
-    let monthRateSum = 0;
-    monthDays.forEach(daySet => {
-      monthRateSum += activeStudents > 0 ? Math.min(100, (daySet.size / activeStudents) * 100) : 0;
-    });
-    const attendanceRate = monthDays.size > 0 ? Math.round(monthRateSum / monthDays.size) : 0;
+    const attendanceRate = monthTotal > 0 ? Math.round((monthPresent / monthTotal) * 100) : 0;
 
     // ========== TOP PERFORMING STREAMS (by Stream + Semester) - ALL TIME ==========
     const streamStats = await req.db.collection('attendance').aggregate([
@@ -232,23 +221,22 @@ router.get('/stats', async (req, res) => {
       if (!dateStr) return;
 
       if (!dailyStats.has(dateStr)) {
-        dailyStats.set(dateStr, new Set());
+        dailyStats.set(dateStr, { present: 0, total: 0 });
       }
 
-      const dayStudents = dailyStats.get(dateStr);
+      const dayStats = dailyStats.get(dateStr);
+      const pCount = r.presentCount !== undefined ? r.presentCount : (r.studentsPresent ? r.studentsPresent.length : 0);
+      const absCount = r.absentCount !== undefined ? r.absentCount : Math.max(0, (r.totalStudents || 0) - pCount);
 
-      if (r.studentsPresent && Array.isArray(r.studentsPresent)) {
-        r.studentsPresent.forEach(studentId => {
-          dayStudents.add(String(studentId));
-        });
-      }
+      dayStats.present += pCount;
+      dayStats.total += (pCount + absCount);
     });
 
-    // Calculate daily percentages using active students as total
-    dailyStats.forEach((dayStudents, dateStr) => {
+    // Calculate daily percentages for marked classes
+    dailyStats.forEach((dayStats, dateStr) => {
       const dateParts = dateStr.split('-');
       const key = `${parseInt(dateParts[0])}-${parseInt(dateParts[1])}-${parseInt(dateParts[2])}`;
-      dailyDataMap.set(key, activeStudents > 0 ? Math.min(100, Math.round((dayStudents.size / activeStudents) * 100)) : 0);
+      dailyDataMap.set(key, dayStats.total > 0 ? Math.round((dayStats.present / dayStats.total) * 100) : 0);
     });
 
     // Fill in last 15 days
@@ -453,7 +441,7 @@ router.get('/attendance/stats', async (req, res) => {
     // Daily attendance trends (last 7 days)
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const localDateStr = (d) => { const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dy = String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dy}`; };
+    const localDateStr = (d) => { const y = d.getFullYear(); const m = String(d.getMonth() + 1).padStart(2, '0'); const dy = String(d.getDate()).padStart(2, '0'); return `${y}-${m}-${dy}`; };
     const sevenDaysAgoStr = localDateStr(sevenDaysAgo);
 
     const dailyTrends = await req.db.collection('attendance')
@@ -510,7 +498,13 @@ router.get('/summary', async (req, res) => {
     console.log('⚡ Fetching quick dashboard summary...');
 
     const [totalStudents, totalStreams, totalSubjects] = await Promise.all([
-      req.db.collection('students').countDocuments({ isActive: true }),
+      req.db.collection('students').aggregate([
+        { $match: { studentID: { $exists: true, $ne: "", $ne: null } } },
+        { $sort: { createdAt: -1 } },
+        { $group: { _id: { $toLower: { $trim: { input: "$studentID" } } }, isActive: { $first: "$isActive" } } },
+        { $match: { isActive: true } },
+        { $count: "total" }
+      ]).toArray().then(arr => arr[0]?.total || 0),
       req.db.collection('students').distinct('stream', { isActive: true }).then(arr => arr.length),
       req.db.collection('subjects').countDocuments({ isActive: true })
     ]);
@@ -559,9 +553,9 @@ router.get('/attendance-trend', async (req, res) => {
   try {
     const period = req.query.period || 'month';
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    
+
     let daysToFetch, labelFormat;
-    
+
     switch (period) {
       case 'week':
         daysToFetch = 7;
@@ -577,64 +571,63 @@ router.get('/attendance-trend', async (req, res) => {
         labelFormat = 'date'; // Show dates
         break;
     }
-    
+
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - (daysToFetch - 1));
     startDate.setHours(0, 0, 0, 0);
-    
+
     // Local date string helper
-    const localDateStr = (d) => { const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); const dy = String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${dy}`; };
-    
+    const localDateStr = (d) => { const y = d.getFullYear(); const m = String(d.getMonth() + 1).padStart(2, '0'); const dy = String(d.getDate()).padStart(2, '0'); return `${y}-${m}-${dy}`; };
+
     // Get all attendance records for the period
     const trendRecords = await req.db.collection('attendance').find({
       date: { $gte: localDateStr(startDate) }
     }).toArray();
-    
+
     // Get total active students for rate calculation (unique by studentID)
     const activeStudentIDs = await req.db.collection('students').distinct('studentID', { isActive: true });
     const activeStudentCount = activeStudentIDs.filter(id => id != null).length;
-    
+
     // Group by date, counting globally unique students
     const dailyStats = new Map();
-    
+
     trendRecords.forEach(r => {
       const dateStr = r.date || null;
       if (!dateStr) return;
-      
+
       if (!dailyStats.has(dateStr)) {
-        dailyStats.set(dateStr, new Set());
+        dailyStats.set(dateStr, { present: 0, total: 0 });
       }
-      
-      const dayStudents = dailyStats.get(dateStr);
-      
-      if (r.studentsPresent && Array.isArray(r.studentsPresent)) {
-        r.studentsPresent.forEach(studentId => {
-          dayStudents.add(String(studentId));
-        });
-      }
+
+      const dayStats = dailyStats.get(dateStr);
+      const pCount = r.presentCount !== undefined ? r.presentCount : (r.studentsPresent ? r.studentsPresent.length : 0);
+      const absCount = r.absentCount !== undefined ? r.absentCount : Math.max(0, (r.totalStudents || 0) - pCount);
+
+      dayStats.present += pCount;
+      dayStats.total += (pCount + absCount);
     });
-    
-    // Calculate daily percentages using active students as total
+
+    // Calculate daily percentages using classes marked
     const dailyDataMap = new Map();
-    dailyStats.forEach((dayStudents, dateStr) => {
-      dailyDataMap.set(dateStr, activeStudentCount > 0 ? Math.min(100, Math.round((dayStudents.size / activeStudentCount) * 100)) : 0);
+    dailyStats.forEach((dayStats, dateStr) => {
+      dailyDataMap.set(dateStr, dayStats.total > 0 ? Math.round((dayStats.present / dayStats.total) * 100) : 0);
     });
-    
+
     const labels = [];
     const data = [];
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    
+
     if (labelFormat === 'month') {
       // For year view - aggregate by month
       const monthlyData = new Map();
-      
+
       for (let i = 11; i >= 0; i--) {
         const d = new Date();
         d.setMonth(d.getMonth() - i);
         const monthKey = `${d.getFullYear()}-${d.getMonth() + 1}`;
         monthlyData.set(monthKey, { total: 0, count: 0 });
       }
-      
+
       dailyDataMap.forEach((rate, dateStr) => {
         const [y, m] = dateStr.split('-').map(Number);
         const key = `${y}-${m}`;
@@ -644,38 +637,38 @@ router.get('/attendance-trend', async (req, res) => {
           mData.count += 1;
         }
       });
-      
+
       monthlyData.forEach((mData, key) => {
         const [y, m] = key.split('-').map(Number);
         labels.push(monthNames[m - 1]);
         data.push(mData.count > 0 ? Math.round(mData.total / mData.count) : 0);
       });
-      
+
     } else {
       // For week/month view - show each day
       for (let i = daysToFetch - 1; i >= 0; i--) {
         const d = new Date();
         d.setDate(d.getDate() - i);
         const dateStr = localDateStr(d);
-        
+
         if (labelFormat === 'day') {
           labels.push(dayNames[d.getDay()]);
         } else {
           labels.push(`${d.getDate()} ${monthNames[d.getMonth()]}`);
         }
-        
+
         data.push(dailyDataMap.get(dateStr) || 0);
       }
     }
-    
+
     console.log(`📊 Attendance trend (${period}):`, labels.length, 'data points');
-    
+
     res.json({
       success: true,
       period,
       trend: { labels, data }
     });
-    
+
   } catch (error) {
     console.error('❌ Error fetching attendance trend:', error);
     res.status(500).json({

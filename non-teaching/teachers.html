@@ -13,6 +13,7 @@
     rel="stylesheet">
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL@20..48,100..700,0..1" />
+  <link rel="stylesheet" href="css/profile.css">
   <style>
     :root {
       --bg-root: #0C0C0E;
@@ -953,6 +954,9 @@
 
   <div id="toastContainer"></div>
 
+  <!-- Profile Handler -->
+  <script src="js/profile-handler.js"></script>
+
   <!-- Firebase Auth -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js";
@@ -980,13 +984,19 @@
       return parts.map(n => n[0]).join("").substring(0, 2).toUpperCase();
     }
 
-    function updateUserInfo(displayName, email) {
+    function updateUserInfo(displayName, email, profileImageUrl) {
       const fullNameEl = document.getElementById('headerUserFullName');
       const emailEl = document.getElementById('headerUserEmail');
       const avatarEl = document.getElementById('headerAvatar');
       if (fullNameEl) fullNameEl.textContent = displayName;
       if (emailEl) emailEl.textContent = email;
-      if (avatarEl) avatarEl.textContent = getInitials(displayName);
+      if (avatarEl) {
+        if (profileImageUrl) {
+          avatarEl.innerHTML = `<img src="${profileImageUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;">`;
+        } else {
+          avatarEl.textContent = getInitials(displayName);
+        }
+      }
     }
 
     const logoutBtn = document.getElementById("logoutBtn");
@@ -1002,7 +1012,14 @@
         let displayName = user.displayName || user.email.split('@')[0].replace(/[._]/g, ' ').split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
         const profile = await fetchTeacherProfile(user.email);
         if (profile && profile.name) displayName = profile.name;
-        updateUserInfo(displayName, user.email);
+        updateUserInfo(displayName, user.email, profile?.profileImageUrl);
+
+        // Initialize Profile Image Upload Logic
+        if (typeof initProfileUpload === 'function') {
+          initProfileUpload(user.email);
+        }
+
+        if (typeof loadTeachers === 'function') loadTeachers();
       } else { window.location.href = 'index.html'; }
     });
   </script>

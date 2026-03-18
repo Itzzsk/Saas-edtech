@@ -6,21 +6,21 @@ if (!admin.apps.length) {
   try {
     let serviceAccount;
 
-    // Check if we have credentials in environment variables
-    if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
-      console.log('📡 Initializing Firebase Admin via Environment Variables');
-      serviceAccount = {
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      };
-    } else {
-      // Fallback to local JSON file
-      try {
-        console.log('📁 Initializing Firebase Admin via serviceAccountKey.json');
-        serviceAccount = require('./serviceAccountKey.json');
-      } catch (fileError) {
-        throw new Error('No Firebase credentials found (missing ENV vars or serviceAccountKey.json)');
+    // Try local JSON file first (more reliable than env vars)
+    try {
+      serviceAccount = require('./serviceAccountKey.json');
+      console.log('📁 Firebase Admin loaded from serviceAccountKey.json');
+    } catch (fileError) {
+      // Fallback to environment variables
+      if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
+        console.log('📡 Initializing Firebase Admin via Environment Variables');
+        serviceAccount = {
+          projectId: process.env.FIREBASE_PROJECT_ID,
+          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        };
+      } else {
+        throw new Error('No Firebase credentials found (missing serviceAccountKey.json and ENV vars)');
       }
     }
 
