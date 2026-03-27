@@ -66,4 +66,4 @@ The system is deployed on a dedicated **Hostinger VPS (Virtual Private Server)**
 
 ---
 *Developed for excellence in Institutional Management.*
-*© 2024 AI-Powered AMS. All rights reserved.*
+*© 2026 AI-Powered AMS. All rights reserved.*
